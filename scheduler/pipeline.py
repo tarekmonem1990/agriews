@@ -1,14 +1,15 @@
 """
-AgriEWS — self-contained pipeline with locale-aware voice notes
-Free voice notes via gTTS (Google Translate TTS — no API key needed)
+AgriEWS — Complete Pipeline v2.1
+All functions self-contained in correct order.
 """
 import asyncio
 import os
 import json
 import tempfile
+import hashlib
 import httpx
 import structlog
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from enum import Enum
 from typing import Optional
 from dotenv import load_dotenv
@@ -21,77 +22,38 @@ logger = structlog.get_logger()
 
 ANTHROPIC_API_KEY        = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL          = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-ANTHROPIC_MAX_TOKENS     = int(os.getenv("ANTHROPIC_MAX_TOKENS", "400"))
-WFP_VAM_BASE_URL         = os.getenv("WFP_VAM_BASE_URL", "https://api.vam.wfp.org/")
+ANTHROPIC_MAX_TOKENS     = int(os.getenv("ANTHROPIC_MAX_TOKENS", "500"))
+WFP_VAM_BASE_URL         = os.getenv("WFP_VAM_BASE_URL", "https://api.wfp.org/vam-data-bridges/7.0.0/")
+ACLED_API_KEY            = os.getenv("ACLED_API_KEY", "")
+ACLED_EMAIL              = os.getenv("ACLED_EMAIL", "")
+WHATSAPP_API_TOKEN       = os.getenv("WHATSAPP_API_TOKEN", "")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 AT_API_KEY               = os.getenv("AT_API_KEY", "")
 AT_USERNAME              = os.getenv("AT_USERNAME", "sandbox")
 AT_SENDER_ID             = os.getenv("AT_SENDER_ID", "AgriEWS")
-WHATSAPP_API_TOKEN       = os.getenv("WHATSAPP_API_TOKEN", "")
-WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
+CACHE_DIR = "/tmp/agriews_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ── LOCALE MAP ────────────────────────────────────────────────────────────────
-# Maps district language names to gTTS language codes.
-# gTTS uses Google Translate under the hood — free, no key needed.
-# Add new languages here as you onboard new countries.
-# Full list: https://gtts.readthedocs.io/en/latest/module.html#languages
 
 LANGUAGE_TO_GTTS = {
-    # West Africa
-    "french":     "fr",
-    "wolof":      "fr",   # fallback to French until Wolof TTS matures
-    "bambara":    "fr",   # fallback
-    "hausa":      "ha",
-    "yoruba":     "yo",
-    "igbo":       "ig",
-
-    # East Africa
-    "amharic":    "am",
-    "swahili":    "sw",
-    "tigrinya":   "ti",
-    "somali":     "so",
-    "oromo":      "om",
-
-    # North Africa / Middle East
-    "arabic":     "ar",
-    "darija":     "ar",   # Moroccan Arabic fallback
-
-    # South / Southeast Asia
-    "hindi":      "hi",
-    "marathi":    "mr",
-    "punjabi":    "pa",
-    "bengali":    "bn",
-    "telugu":     "te",
-    "tamil":      "ta",
-    "kannada":    "kn",
-    "gujarati":   "gu",
-    "urdu":       "ur",
-    "nepali":     "ne",
-    "sinhala":    "si",
-    "khmer":      "km",
-    "burmese":    "my",
-    "thai":       "th",
-    "vietnamese": "vi",
-    "indonesian": "id",
-    "tagalog":    "tl",
-
-    # East Asia
-    "mandarin":   "zh-CN",
-    "cantonese":  "zh-TW",
-
-    # Central Asia
-    "uzbek":      "uz",
-    "kazakh":     "kk",
-
-    # Latin America
-    "spanish":    "es",
-    "portuguese": "pt",
-    "quechua":    "qu",
-
-    # Default fallback
-    "english":    "en",
+    "french": "fr", "wolof": "fr", "bambara": "fr",
+    "hausa": "ha", "yoruba": "yo", "igbo": "ig",
+    "amharic": "am", "swahili": "sw", "somali": "so",
+    "tigrinya": "ti", "oromo": "om",
+    "arabic": "ar", "darija": "ar",
+    "hindi": "hi", "marathi": "mr", "punjabi": "pa",
+    "bengali": "bn", "telugu": "te", "tamil": "ta",
+    "kannada": "kn", "gujarati": "gu", "urdu": "ur",
+    "nepali": "ne", "sinhala": "si",
+    "khmer": "km", "burmese": "my", "thai": "th",
+    "vietnamese": "vi", "indonesian": "id", "tagalog": "tl",
+    "mandarin": "zh-CN", "cantonese": "zh-TW",
+    "uzbek": "uz", "kazakh": "kk",
+    "spanish": "es", "portuguese": "pt",
+    "english": "en",
 }
-
 
 # ── ENUMS ─────────────────────────────────────────────────────────────────────
 
@@ -113,41 +75,150 @@ class TrendDirection(str, Enum):
     SPIKE   = "spike"
     CRASH   = "crash"
 
+class GrowthStage(str, Enum):
+    PRE_SEASON   = "pre_season"
+    PLANTING     = "planting"
+    VEGETATIVE   = "vegetative"
+    FLOWERING    = "flowering"
+    GRAIN_FILL   = "grain_fill"
+    HARVEST      = "harvest"
+    POST_HARVEST = "post_harvest"
 
-# ── DISTRICT REGISTRY ─────────────────────────────────────────────────────────
-# Add your districts here.
-# To add a new country: copy one block and update the values.
-# The language field automatically determines the voice note language.
+# ── CROP CALENDARS ────────────────────────────────────────────────────────────
+
+CROP_CALENDARS = {
+    "groundnut_west_africa": {
+        GrowthStage.PLANTING:    (6, 6),
+        GrowthStage.VEGETATIVE:  (7, 7),
+        GrowthStage.FLOWERING:   (8, 8),
+        GrowthStage.GRAIN_FILL:  (9, 9),
+        GrowthStage.HARVEST:     (10, 11),
+        GrowthStage.POST_HARVEST:(12, 5),
+    },
+    "millet_west_africa": {
+        GrowthStage.PLANTING:    (6, 7),
+        GrowthStage.VEGETATIVE:  (7, 8),
+        GrowthStage.FLOWERING:   (8, 9),
+        GrowthStage.GRAIN_FILL:  (9, 10),
+        GrowthStage.HARVEST:     (10, 11),
+        GrowthStage.POST_HARVEST:(12, 5),
+    },
+    "sorghum_west_africa": {
+        GrowthStage.PLANTING:    (6, 7),
+        GrowthStage.VEGETATIVE:  (7, 8),
+        GrowthStage.FLOWERING:   (8, 9),
+        GrowthStage.GRAIN_FILL:  (9, 10),
+        GrowthStage.HARVEST:     (11, 12),
+        GrowthStage.POST_HARVEST:(1, 5),
+    },
+    "maize_east_africa": {
+        GrowthStage.PLANTING:    (3, 4),
+        GrowthStage.VEGETATIVE:  (4, 5),
+        GrowthStage.FLOWERING:   (5, 6),
+        GrowthStage.GRAIN_FILL:  (6, 7),
+        GrowthStage.HARVEST:     (7, 8),
+        GrowthStage.POST_HARVEST:(8, 2),
+    },
+    "teff_east_africa": {
+        GrowthStage.PLANTING:    (6, 7),
+        GrowthStage.VEGETATIVE:  (7, 8),
+        GrowthStage.FLOWERING:   (8, 9),
+        GrowthStage.GRAIN_FILL:  (9, 10),
+        GrowthStage.HARVEST:     (10, 11),
+        GrowthStage.POST_HARVEST:(11, 5),
+    },
+    "rice_south_asia": {
+        GrowthStage.PLANTING:    (6, 7),
+        GrowthStage.VEGETATIVE:  (7, 8),
+        GrowthStage.FLOWERING:   (8, 9),
+        GrowthStage.GRAIN_FILL:  (9, 10),
+        GrowthStage.HARVEST:     (10, 11),
+        GrowthStage.POST_HARVEST:(11, 5),
+    },
+    "default": {
+        GrowthStage.PLANTING:    (4, 5),
+        GrowthStage.VEGETATIVE:  (5, 6),
+        GrowthStage.FLOWERING:   (6, 7),
+        GrowthStage.GRAIN_FILL:  (7, 8),
+        GrowthStage.HARVEST:     (8, 10),
+        GrowthStage.POST_HARVEST:(10, 3),
+    },
+}
+
+CROP_CALENDAR_LOOKUP = {
+    ("groundnut", "SN"): "groundnut_west_africa",
+    ("groundnut", "GM"): "groundnut_west_africa",
+    ("groundnut", "GN"): "groundnut_west_africa",
+    ("millet",    "SN"): "millet_west_africa",
+    ("millet",    "ML"): "millet_west_africa",
+    ("millet",    "NE"): "millet_west_africa",
+    ("sorghum",   "SN"): "sorghum_west_africa",
+    ("sorghum",   "BF"): "sorghum_west_africa",
+    ("maize",     "ET"): "maize_east_africa",
+    ("maize",     "KE"): "maize_east_africa",
+    ("teff",      "ET"): "teff_east_africa",
+    ("rice",      "IN"): "rice_south_asia",
+    ("rice",      "BD"): "rice_south_asia",
+}
+
+def get_growth_stage(crop: str, country_iso: str) -> GrowthStage:
+    calendar_key = CROP_CALENDAR_LOOKUP.get(
+        (crop.lower(), country_iso.upper()), "default"
+    )
+    calendar      = CROP_CALENDARS[calendar_key]
+    current_month = date.today().month
+    for stage, (start, end) in calendar.items():
+        if start <= end:
+            if start <= current_month <= end:
+                return stage
+        else:
+            if current_month >= start or current_month <= end:
+                return stage
+    return GrowthStage.POST_HARVEST
+
+# ── CACHE ─────────────────────────────────────────────────────────────────────
+
+def cache_set(key: str, data, ttl_hours: int = 6):
+    cache_file = os.path.join(
+        CACHE_DIR, hashlib.md5(key.encode()).hexdigest() + ".json"
+    )
+    payload = {
+        "data":    data,
+        "expires": (datetime.utcnow() + timedelta(hours=ttl_hours)).isoformat(),
+    }
+    with open(cache_file, "w") as f:
+        json.dump(payload, f, default=str)
+
+def cache_get(key: str):
+    cache_file = os.path.join(
+        CACHE_DIR, hashlib.md5(key.encode()).hexdigest() + ".json"
+    )
+    if not os.path.exists(cache_file):
+        return None
+    with open(cache_file) as f:
+        payload = json.load(f)
+    if datetime.utcnow() > datetime.fromisoformat(payload["expires"]):
+        return None
+    logger.info("cache_hit", key=key)
+    return payload["data"]
+
+# ── DISTRICT & FARMER REGISTRY ────────────────────────────────────────────────
 
 DISTRICTS = [
     {
         "id":          "sn_kaffrine_nord",
         "country_iso": "SN",
         "name":        "Kaffrine Nord",
+        "region":      "west_africa",
         "lat":         14.105,
         "lon":         -15.551,
         "crops":       ["groundnut", "millet", "sorghum"],
         "languages":   ["french"],
         "channels":    [Channel.WHATSAPP],
         "timezone":    "Africa/Dakar",
+        "fragile":     False,
     },
-    # Example — uncomment to add India Maharashtra district:
-    # {
-    #     "id":          "in_pune_rural",
-    #     "country_iso": "IN",
-    #     "name":        "Pune Rural",
-    #     "lat":         18.520,
-    #     "lon":         73.856,
-    #     "crops":       ["sorghum", "sugarcane", "onion"],
-    #     "languages":   ["marathi"],
-    #     "channels":    [Channel.WHATSAPP],
-    #     "timezone":    "Asia/Kolkata",
-    # },
 ]
-
-
-# ── FARMER REGISTRY ───────────────────────────────────────────────────────────
-# Replace the phone number with your own to receive the first test advisory.
 
 FARMERS = [
     {
@@ -161,100 +232,116 @@ FARMERS = [
     },
 ]
 
-
-# ── STEP 1: FETCH WEATHER ─────────────────────────────────────────────────────
+# ── STEP 1: WEATHER ───────────────────────────────────────────────────────────
 
 async def fetch_weather(district_id, lat, lon):
+    cache_key = f"weather_{district_id}"
+    cached    = cache_get(cache_key)
+    if cached:
+        return cached
+
     params = {
         "latitude":      lat,
         "longitude":     lon,
         "daily":         "precipitation_sum,temperature_2m_max,temperature_2m_min",
+        "hourly":        "relativehumidity_2m",
         "forecast_days": 7,
         "timezone":      "auto",
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params=params
-        )
-        r.raise_for_status()
-        data = r.json()
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                "https://api.open-meteo.com/v1/forecast", params=params
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        logger.error("weather_fetch_failed", error=str(e))
+        stale = cache_get(f"{cache_key}_stale")
+        if stale:
+            stale["data_stale"] = True
+            return stale
+        raise
 
     daily    = data.get("daily", {})
+    hourly   = data.get("hourly", {})
     precip   = daily.get("precipitation_sum", [0] * 7)
     tmax     = daily.get("temperature_2m_max", [0] * 7)
     tmin     = daily.get("temperature_2m_min", [0] * 7)
-    rain_7d  = sum(p for p in precip if p is not None)
-    rain_24h = precip[0] if precip else 0.0
+    humidity = hourly.get("relativehumidity_2m", [0] * 168)
 
-    logger.info("weather_fetched",
-                district=district_id,
-                rain_7d=round(rain_7d, 1))
+    rain_7d      = sum(p for p in precip if p is not None)
+    rain_24h     = precip[0] if precip else 0.0
+    avg_humidity = (sum(h for h in humidity[:24] if h) / 24) if humidity else 0.0
 
-    return {
-        "district_id": district_id,
-        "rain_7d_mm":  rain_7d,
-        "rain_24h_mm": rain_24h,
-        "temp_max_c":  tmax[0] or 0.0,
-        "temp_min_c":  tmin[0] or 0.0,
-        "flood_risk":  min(100.0, rain_24h * 2.5) if rain_24h > 30 else 0.0,
-        "source":      "open-meteo",
+    spi    = _compute_spi_proxy(rain_7d, lat, date.today().month)
+    result = {
+        "district_id":  district_id,
+        "rain_7d_mm":   rain_7d,
+        "rain_24h_mm":  rain_24h,
+        "temp_max_c":   tmax[0] or 0.0,
+        "temp_min_c":   tmin[0] or 0.0,
+        "humidity_pct": avg_humidity,
+        "flood_risk":   min(100.0, rain_24h * 2.5) if rain_24h > 30 else 0.0,
+        "spi":          spi,
+        "source":       "open-meteo",
+        "data_stale":   False,
     }
+    cache_set(cache_key, result, ttl_hours=3)
+    cache_set(f"{cache_key}_stale", result, ttl_hours=72)
+    logger.info("weather_fetched", district=district_id,
+                rain_7d=round(rain_7d, 1), spi=round(spi, 2))
+    return result
 
+def _compute_spi_proxy(rain_7d_mm, lat, month):
+    abs_lat = abs(lat)
+    if abs_lat < 15:
+        norm = 35.0 if month in [6,7,8,9,10] else 5.0
+    elif abs_lat < 25:
+        norm = 20.0 if month in [7,8,9] else 2.0
+    else:
+        norm = 15.0
+    if norm == 0:
+        return 0.0
+    return round(max(-3.0, min(3.0, ((rain_7d_mm - norm) / norm) * 2.0)), 2)
 
-# ── STEP 2: FETCH MARKET PRICES ───────────────────────────────────────────────
+# ── STEP 2: MARKET PRICES ─────────────────────────────────────────────────────
 
 async def fetch_market_prices(district_id, country_iso, crops):
-    """
-    Fetch crop prices from WFP DataBridges (primary) and FEWS NET (secondary).
-    Both free, no API key needed. Results merged and deduplicated.
-    """
     cache_key = f"market_{district_id}"
-    cached = cache_get(cache_key)
+    cached    = cache_get(cache_key)
     if cached:
         return cached
 
     prices = []
 
-    # Source 1: WFP DataBridges
     try:
-        vam_prices = await _fetch_wfp_vam(district_id, country_iso, crops)
-        prices.extend(vam_prices)
-        logger.info("wfp_vam_fetched",
-                    district=district_id, count=len(vam_prices))
+        vam = await _fetch_wfp_vam(district_id, country_iso, crops)
+        prices.extend(vam)
+        logger.info("wfp_vam_fetched", district=district_id, count=len(vam))
     except Exception as e:
         logger.warning("wfp_vam_failed", error=str(e))
 
-    # Source 2: FEWS NET
     try:
-        fews_prices = await _fetch_fews_net(district_id, country_iso, crops)
-        existing_crops = {p["crop"] for p in prices}
-        new_fews = [p for p in fews_prices
-                    if p["crop"] not in existing_crops]
-        prices.extend(new_fews)
-        logger.info("fews_net_fetched",
-                    district=district_id, count=len(fews_prices))
+        fews = await _fetch_fews_net(district_id, country_iso, crops)
+        existing = {p["crop"] for p in prices}
+        prices.extend([p for p in fews if p["crop"] not in existing])
+        logger.info("fews_net_fetched", district=district_id, count=len(fews))
     except Exception as e:
         logger.warning("fews_net_failed", error=str(e))
 
     if prices:
         cache_set(cache_key, prices, ttl_hours=12)
-
     return prices
+
 async def _fetch_wfp_vam(district_id, country_iso, crops):
-    # WFP DataBridges API v2 — replaced old VAM endpoint
-    url    = "https://api.wfp.org/vam-data-bridges/7.0.0/MarketPrices/PriceMonthly"
+    url    = f"{WFP_VAM_BASE_URL}MarketPrices/PriceMonthly"
     params = {"CountryCode": country_iso, "format": "json"}
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-            records = r.json()
-    except Exception as e:
-        logger.warning("market_fetch_failed", error=str(e))
-        return []
-
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        records = r.json()
     prices = []
     for record in records:
         commodity = record.get("CommodityName", "").lower()
@@ -263,103 +350,311 @@ async def _fetch_wfp_vam(district_id, country_iso, crops):
         price = record.get("Price")
         if price is None:
             continue
-        prev  = record.get("PreviousPrice")
-        pct   = ((float(price) - float(prev)) / float(prev) * 100
-                 if prev and float(prev) > 0 else 0.0)
-        trend = (TrendDirection.SPIKE   if pct > 15  else
-                 TrendDirection.RISING  if pct > 3   else
-                 TrendDirection.CRASH   if pct < -15 else
-                 TrendDirection.FALLING if pct < -3  else
-                 TrendDirection.STABLE)
+        prev = record.get("PreviousPrice")
+        pct  = ((float(price) - float(prev)) / float(prev) * 100
+                if prev and float(prev) > 0 else 0.0)
         prices.append({
             "crop":        commodity,
             "price_local": float(price),
             "currency":    record.get("CurrencyName", "USD"),
             "unit":        record.get("UnitName", "kg"),
             "market_name": record.get("MarketName", "unknown"),
-            "trend":       trend,
+            "trend":       _trend(pct),
             "trend_pct":   round(pct, 1),
+            "source":      "wfp-vam",
         })
-
-    logger.info("market_prices_fetched",
-                district=district_id, count=len(prices))
     return prices
 
+async def _fetch_fews_net(district_id, country_iso, crops):
+    url    = "https://fdw.fews.net/api/marketprice/"
+    params = {"country_code": country_iso, "format": "json", "page_size": 100}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+    prices = []
+    for record in data.get("results", []):
+        commodity = record.get("commodity", "").lower()
+        if not any(crop.lower() in commodity for crop in crops):
+            continue
+        price = record.get("price")
+        if price is None:
+            continue
+        prices.append({
+            "crop":        commodity,
+            "price_local": float(price),
+            "currency":    record.get("currency_name", "USD"),
+            "unit":        record.get("unit_name", "kg"),
+            "market_name": record.get("market_name", "unknown"),
+            "trend":       TrendDirection.STABLE,
+            "trend_pct":   0.0,
+            "source":      "fews-net",
+        })
+    return prices
 
-# ── STEP 3: FETCH INPUT PRICE SHOCKS ─────────────────────────────────────────
+def _trend(pct):
+    if pct > 15:    return TrendDirection.SPIKE
+    elif pct > 3:   return TrendDirection.RISING
+    elif pct < -15: return TrendDirection.CRASH
+    elif pct < -3:  return TrendDirection.FALLING
+    else:           return TrendDirection.STABLE
 
-async def fetch_shocks(district_id):
-    # World Bank Commodity Price Data API — free, no key needed
-    # Fetches fertilizer price index directly
+# ── STEP 3: SHOCK SIGNALS ─────────────────────────────────────────────────────
+
+async def fetch_shocks(district_id, country_iso, lat, lon):
+    cache_key = f"shocks_{district_id}"
+    cached    = cache_get(cache_key)
+    if cached:
+        return cached
+
+    shocks = []
+
+    try:
+        wb = await _fetch_wb_rtp(district_id)
+        shocks.extend(wb)
+    except Exception as e:
+        logger.warning("wb_rtp_failed", error=str(e))
+
+    if ACLED_API_KEY and ACLED_EMAIL:
+        try:
+            conflict = await _fetch_acled_events(
+                district_id, country_iso, lat, lon
+            )
+            shocks.extend(conflict)
+        except Exception as e:
+            logger.warning("acled_failed", error=str(e))
+    else:
+        logger.info("acled_skipped", note="Register free at acleddata.com")
+
+    if shocks:
+        cache_set(cache_key, shocks, ttl_hours=6)
+    return shocks
+
+async def _fetch_wb_rtp(district_id):
     WB_URL = (
         "https://api.worldbank.org/v2/en/indicator/AG.PRD.FERT.ZS"
         "?format=json&mrv=2&per_page=2"
     )
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(WB_URL)
-            r.raise_for_status()
-            data = r.json()
-    except Exception as e:
-        logger.warning("shock_fetch_failed", error=str(e))
-        return []
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(WB_URL)
+        r.raise_for_status()
+        data = r.json()
 
-    shocks = []
-    try:
-        # World Bank API returns array: [metadata, [datapoints]]
-        records = data[1] if isinstance(data, list) and len(data) > 1 else []
-        values  = [
-            float(r["value"])
-            for r in records
-            if r.get("value") is not None
-        ]
-        if len(values) >= 2:
-            current  = values[0]
-            previous = values[1]
-            pct      = (current - previous) / previous * 100
-            is_shock = abs(pct) > 10
+    shocks  = []
+    records = data[1] if isinstance(data, list) and len(data) > 1 else []
+    values  = [float(r["value"]) for r in records if r.get("value") is not None]
 
-            # Also check absolute level — above 150 index is historically high
-            level_alert = current > 150
+    if len(values) >= 2:
+        current  = values[0]
+        previous = values[1]
+        pct      = (current - previous) / previous * 100
+        is_shock = abs(pct) > 10
+        level_alert = current > 150
 
-            if is_shock or level_alert:
-                reason_parts = []
-                if is_shock:
-                    reason_parts.append(
-                        f"Global fertilizer index moved {pct:+.1f}% "
-                        f"vs last month"
-                    )
-                if level_alert:
-                    reason_parts.append(
-                        f"Fertilizer index at {current:.0f} — "
-                        f"historically elevated level"
-                    )
-                shocks.append({
-                    "type":         "price_shock",
-                    "input_type":   "fertilizer",
-                    "trend_pct":    round(pct, 1),
-                    "shock_reason": ". ".join(reason_parts),
-                    "severity":     "high" if abs(pct) > 20 else "medium",
-                    "source":       "world-bank-api",
-                })
-    except Exception as e:
-        logger.warning("wb_parse_failed", error=str(e))
+        if is_shock or level_alert:
+            reasons = []
+            if is_shock:
+                reasons.append(
+                    f"Global fertilizer index moved {pct:+.1f}% vs last period"
+                )
+            if level_alert:
+                reasons.append(
+                    f"Fertilizer index at {current:.0f} — historically elevated"
+                )
+            shocks.append({
+                "type":         "price_shock",
+                "input_type":   "fertilizer",
+                "trend_pct":    round(pct, 1),
+                "shock_reason": ". ".join(reasons),
+                "severity":     "high" if abs(pct) > 20 else "medium",
+                "source":       "world-bank-api",
+            })
     return shocks
 
+async def _fetch_acled_events(district_id, country_iso, lat, lon):
+    url    = "https://api.acleddata.com/acled/read"
+    params = {
+        "key":              ACLED_API_KEY,
+        "email":            ACLED_EMAIL,
+        "country":          country_iso,
+        "event_date":       (date.today() - timedelta(days=30)).strftime("%Y-%m-%d"),
+        "event_date_where": ">=",
+        "limit":            50,
+        "fields":           "event_date|event_type|fatalities|location|latitude|longitude",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
 
-# ── STEP 4: SCORE HAZARDS ─────────────────────────────────────────────────────
+    events = data.get("data", [])
+    nearby = []
+    for event in events:
+        try:
+            if _haversine_km(lat, lon,
+                             float(event.get("latitude", 0)),
+                             float(event.get("longitude", 0))) <= 200:
+                nearby.append(event)
+        except Exception:
+            continue
 
-def score_hazards(weather):
+    violent = [e for e in nearby if e.get("event_type") in (
+        "Battles", "Violence against civilians", "Explosions/Remote violence"
+    )]
+
+    if not violent:
+        return []
+
+    return [{
+        "type":         "conflict_signal",
+        "input_type":   "supply routes",
+        "trend_pct":    0.0,
+        "shock_reason": (
+            f"{len(violent)} conflict event(s) within 200km in last 30 days. "
+            f"Input supply routes may be disrupted."
+        ),
+        "severity":     "high" if len(violent) > 3 else "medium",
+        "source":       "acled",
+    }]
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    import math
+    R    = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a    = (math.sin(dlat/2)**2 +
+            math.cos(math.radians(lat1)) *
+            math.cos(math.radians(lat2)) *
+            math.sin(dlon/2)**2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+# ── STEP 4: PEST MONITORING ───────────────────────────────────────────────────
+
+async def fetch_pest_alerts(district_id, country_iso, crops, weather):
+    cache_key = f"pests_{district_id}"
+    cached    = cache_get(cache_key)
+    if cached:
+        return cached
+
+    alerts = []
+
+    if any(c in ["maize", "sorghum", "millet"] for c in crops):
+        try:
+            faw = await _fetch_famews(country_iso)
+            alerts.extend(faw)
+        except Exception as e:
+            logger.warning("famews_failed", error=str(e))
+
+    alerts.extend(_compute_disease_risk(crops, weather))
+
+    if alerts:
+        cache_set(cache_key, alerts, ttl_hours=12)
+    logger.info("pest_alerts_fetched", district=district_id, count=len(alerts))
+    return alerts
+
+async def _fetch_famews(country_iso):
+    url = "https://www.fao.org/famews/data/alerts"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                url, params={"country": country_iso, "format": "json"},
+                follow_redirects=True
+            )
+            if r.status_code != 200:
+                return []
+            data = r.json()
+    except Exception:
+        return []
+    return [{
+        "pest":     "fall armyworm",
+        "severity": a.get("severity", "medium"),
+        "message":  (
+            f"FAO FAMEWS: fall armyworm activity in "
+            f"{a.get('location', 'your region')}. "
+            f"Inspect maize/sorghum for egg masses."
+        ),
+        "source":   "fao-famews",
+    } for a in data.get("alerts", [])]
+
+def _compute_disease_risk(crops, weather):
+    alerts   = []
+    tmax     = weather["temp_max_c"]
+    humidity = weather["humidity_pct"]
+    rain_7d  = weather["rain_7d_mm"]
+
+    if any(c in crops for c in ["wheat", "sorghum"]):
+        if 15 <= tmax <= 25 and humidity > 70:
+            alerts.append({
+                "pest": "rust disease", "severity": "medium",
+                "message": (
+                    "Cool humid conditions favour rust in wheat/sorghum. "
+                    "Inspect for orange-brown pustules on leaves."
+                ),
+                "source": "weather-model",
+            })
+
+    if any(c in crops for c in ["potato", "tomato"]):
+        if tmax < 22 and rain_7d > 20:
+            alerts.append({
+                "pest": "late blight", "severity": "high",
+                "message": (
+                    "Conditions highly favourable for late blight. "
+                    "Check for dark lesions. Apply copper fungicide."
+                ),
+                "source": "weather-model",
+            })
+
+    if any(c in crops for c in ["groundnut", "maize"]):
+        if tmax > 32 and rain_7d < 10:
+            alerts.append({
+                "pest": "aflatoxin risk", "severity": "high",
+                "message": (
+                    "Hot dry conditions increase aflatoxin risk. "
+                    "Harvest promptly and dry grain below 13% moisture."
+                ),
+                "source": "weather-model",
+            })
+    return alerts
+
+# ── STEP 5: SCORE HAZARDS ─────────────────────────────────────────────────────
+
+def score_hazards(weather, pest_alerts, shocks, growth_stage):
+    spi  = weather.get("spi", 0.0)
     rain = weather["rain_7d_mm"]
     r24  = weather["rain_24h_mm"]
     tmax = weather["temp_max_c"]
 
-    drought = (85.0 if rain < 5  else 60.0 if rain < 15 else
-               35.0 if rain < 30 else 15.0 if rain < 50 else 5.0)
-    flood   = (95.0 if r24 > 80 else 75.0 if r24 > 50 else
-               50.0 if r24 > 30 else 25.0 if r24 > 15 else 0.0)
-    pest    = (70.0 if tmax > 30 else 45.0 if tmax > 28 else
-               25.0 if tmax > 25 else 10.0)
+    if   spi <= -2.0: drought = 90.0
+    elif spi <= -1.5: drought = 70.0
+    elif spi <= -1.0: drought = 50.0
+    elif spi <= -0.5: drought = 30.0
+    elif spi > 0.5:   drought = 5.0
+    else:
+        drought = (85.0 if rain < 5  else 60.0 if rain < 15 else
+                   35.0 if rain < 30 else 15.0 if rain < 50 else 5.0)
+
+    flood = (95.0 if r24 > 80 else 75.0 if r24 > 50 else
+             50.0 if r24 > 30 else 25.0 if r24 > 15 else 0.0)
+
+    high_pests = [a for a in pest_alerts if a.get("severity") == "high"]
+    med_pests  = [a for a in pest_alerts if a.get("severity") == "medium"]
+    pest = (80.0 if high_pests else 45.0 if med_pests else
+            25.0 if tmax > 30 else 10.0)
+
+    multipliers = {
+        GrowthStage.FLOWERING:   1.5,
+        GrowthStage.GRAIN_FILL:  1.3,
+        GrowthStage.VEGETATIVE:  1.1,
+        GrowthStage.PLANTING:    1.0,
+        GrowthStage.HARVEST:     0.8,
+        GrowthStage.POST_HARVEST:0.3,
+        GrowthStage.PRE_SEASON:  0.3,
+    }
+    drought = min(100.0, drought * multipliers.get(growth_stage, 1.0))
+
+    if any(s.get("type") == "conflict_signal" for s in shocks):
+        drought = min(100.0, drought * 1.2)
+        pest    = min(100.0, pest    * 1.1)
 
     def level(s):
         return (HazardLevel.EXTREME if s >= 80 else
@@ -370,93 +665,125 @@ def score_hazards(weather):
 
     rank = {"none":0,"low":1,"medium":2,"high":3,"extreme":4}
     dl, fl, pl = level(drought), level(flood), level(pest)
-    composite  = max([dl, fl, pl], key=lambda x: rank[x.value])
+    high_count  = sum(1 for lv in [dl,fl,pl] if rank[lv.value] >= rank["high"])
+    composite   = HazardLevel.EXTREME if high_count >= 2 else max(
+        [dl,fl,pl], key=lambda x: rank[x.value]
+    )
 
     return {
-        "drought_level": dl,
-        "flood_level":   fl,
-        "pest_level":    pl,
+        "drought_level": dl, "flood_level": fl, "pest_level": pl,
         "composite":     composite,
+        "drought_score": round(drought,1), "flood_score": round(flood,1),
+        "pest_score":    round(pest,1),
+        "cascade":       high_count >= 2,
+        "growth_stage":  growth_stage,
+        "spi":           spi,
     }
 
+# ── STEP 6: AGRONOMIC ACTIONS ─────────────────────────────────────────────────
 
-# ── STEP 5: GET AGRONOMIC ACTION ──────────────────────────────────────────────
+def get_action(crop, scores, district):
+    c     = crop.lower()
+    stage = scores["growth_stage"]
+    dl    = scores["drought_level"]
+    fl    = scores["flood_level"]
+    pl    = scores["pest_level"]
 
-def get_action(crop, scores):
-    c = crop.lower()
-    if scores["drought_level"] in (HazardLevel.HIGH, HazardLevel.EXTREME):
+    if dl in (HazardLevel.HIGH, HazardLevel.EXTREME):
+        if stage == GrowthStage.FLOWERING:
+            return {
+                "groundnut": "CRITICAL: irrigate immediately — drought at flowering reduces yield 50-70%.",
+                "maize":     "CRITICAL: irrigate 25-50mm now — drought at silking causes permanent loss.",
+                "default":   "CRITICAL: irrigate immediately — flowering is the most drought-sensitive stage.",
+            }.get(c, "CRITICAL: irrigate immediately — flowering stage drought causes severe yield loss.")
+        elif stage == GrowthStage.GRAIN_FILL:
+            return {
+                "groundnut": "Irrigate to support pod fill. Plan early harvest if drought continues 10+ days.",
+                "maize":     "Irrigate for grain fill. Consider early harvest if irrigation not possible.",
+                "default":   "Irrigate to support grain fill. Plan early harvest if drought continues.",
+            }.get(c, "Irrigate to support grain fill if possible.")
+        elif stage == GrowthStage.VEGETATIVE:
+            return {
+                "groundnut": "Apply mulch to retain moisture. Delay fertilizer until rain returns.",
+                "millet":    "Millet is drought-tolerant at this stage. Monitor for 7 more days.",
+                "sorghum":   "Sorghum tolerates drought at vegetative stage. Monitor for one more week.",
+                "default":   "Apply mulch and delay fertilizer until rain returns.",
+            }.get(c, "Apply mulch and delay fertilizer until rain returns.")
+        elif stage == GrowthStage.PLANTING:
+            return "Delay planting — wait for at least 20mm of rain before sowing to avoid seed loss."
+        else:
+            return "Dry conditions favour harvest and drying. Proceed if crop is mature."
+
+    if fl in (HazardLevel.HIGH, HazardLevel.EXTREME):
         return {
-            "groundnut": "irrigate immediately; apply mulch to retain soil moisture",
-            "maize":     "irrigate at least 25mm; delay fertilizer until rain returns",
-            "millet":    "millet is drought-tolerant — monitor for 5 more days",
-            "sorghum":   "drought-tolerant — consider emergency irrigation if dry 14+ days",
-            "rice":      "maintain paddy water; emergency irrigation required",
-            "wheat":     "irrigate immediately; drought at this stage causes yield loss",
-        }.get(c, "conserve moisture — mulch, avoid tillage, delay fertilizer")
+            "groundnut": "Clear drainage now. No fertilizer before heavy rain.",
+            "rice":      "Monitor paddy level — excess water beyond 15cm damages plants.",
+            "maize":     "Clear drainage — maize cannot tolerate waterlogging beyond 48 hours.",
+            "default":   "Clear drainage channels. No fertilizer or pesticide before rain.",
+        }.get(c, "Clear drainage channels and avoid fertilizer before rain.")
 
-    if scores["flood_level"] in (HazardLevel.HIGH, HazardLevel.EXTREME):
-        return {
-            "groundnut": "clear drainage now; no fertilizer before heavy rain",
-            "rice":      "monitor paddy level — excess water causes root rot",
-        }.get(c, "clear drainage; no fertilizer or pesticide before rain")
+    if pl in (HazardLevel.HIGH, HazardLevel.EXTREME):
+        return (f"Inspect {crop} fields today — conditions favour pest outbreaks. "
+                f"Check leaf undersides and growing points. Contact extension officer if 10%+ damage found.")
 
-    if scores["pest_level"] in (HazardLevel.HIGH, HazardLevel.EXTREME):
-        return (f"inspect {crop} for pest damage — "
-                f"warm humid conditions favour outbreaks")
+    stage_advice = {
+        GrowthStage.PLANTING:    f"Good planting conditions. Ensure seeds are treated before sowing.",
+        GrowthStage.VEGETATIVE:  f"Conditions favourable. Good time to apply top-dressing if rain expected.",
+        GrowthStage.FLOWERING:   f"Critical stage — monitor closely and ensure adequate moisture.",
+        GrowthStage.GRAIN_FILL:  f"Avoid any stress to the crop. Continue normal management.",
+        GrowthStage.HARVEST:     f"Monitor crop maturity and prepare storage.",
+        GrowthStage.POST_HARVEST:f"Good time to prepare land and plan next season inputs.",
+    }
+    return stage_advice.get(stage, f"Conditions favourable for {crop} — continue normal management.")
 
-    return f"conditions favourable for {crop} — continue normal management"
-
-
-# ── STEP 6: GENERATE ADVISORY VIA AI ─────────────────────────────────────────
+# ── STEP 7: GENERATE ADVISORY ─────────────────────────────────────────────────
 
 async def generate_advisory(
-    district, weather, scores, crop_prices, shocks, language, crop
+    district, weather, scores, crop_prices, shocks, pest_alerts, language, crop
 ):
     if not ANTHROPIC_API_KEY:
-        logger.warning("no_anthropic_key_using_template")
         return _template_advisory(
-            district, weather, scores, crop_prices, shocks, crop
+            district, weather, scores, crop_prices, shocks, pest_alerts, crop
         )
 
-    action = get_action(crop, scores)
+    action       = get_action(crop, scores, district)
+    stage        = scores["growth_stage"]
+    cascade_note = (" WARNING: multiple hazards simultaneously — elevated risk."
+                    if scores["cascade"] else "")
+    stale_note   = (" Note: weather data up to 72h old."
+                    if weather.get("data_stale") else "")
+    pest_note    = (" ".join(a["message"] for a in pest_alerts[:1])
+                    if pest_alerts else "")
 
     weather_facts = (
         f"WEATHER for {district['name']} — next 7 days:\n"
-        f"- Total rain: {weather['rain_7d_mm']:.0f}mm | "
-        f"Next 24h: {weather['rain_24h_mm']:.0f}mm\n"
-        f"- Temperature: {weather['temp_min_c']:.0f}C "
-        f"to {weather['temp_max_c']:.0f}C\n"
-        f"- Drought: {scores['drought_level'].value} | "
-        f"Flood: {scores['flood_level'].value} | "
-        f"Pest: {scores['pest_level'].value}\n"
-        f"- Action for {crop}: {action}"
+        f"- Rain: {weather['rain_7d_mm']:.0f}mm total, {weather['rain_24h_mm']:.0f}mm next 24h\n"
+        f"- Temp: {weather['temp_min_c']:.0f}-{weather['temp_max_c']:.0f}C\n"
+        f"- SPI: {weather['spi']:+.1f} ({'below' if weather['spi']<0 else 'above'} seasonal normal)\n"
+        f"- Drought: {scores['drought_level'].value} | Flood: {scores['flood_level'].value} | Pest: {scores['pest_level'].value}\n"
+        f"- Crop stage: {stage.value}\n"
+        f"- Action: {action}{cascade_note}{stale_note}"
     )
-
-    market_facts = "CROP MARKET PRICES:\n" + (
-        "\n".join(
-            f"- {p['crop'].title()}: {p['price_local']:.0f} "
-            f"{p['currency']}/{p['unit']} at {p['market_name']} "
-            f"— {p['trend'].value} ({p['trend_pct']:+.0f}%)"
-            for p in crop_prices[:3]
-        ) or "- No market data available today."
+    market_facts = "MARKET PRICES:\n" + (
+        "\n".join(f"- {p['crop'].title()}: {p['price_local']:.0f} {p['currency']}/{p['unit']} "
+                  f"at {p['market_name']} — {p['trend'].value} ({p['trend_pct']:+.0f}%)"
+                  for p in crop_prices[:3])
+        or "- No market data available today."
     )
-
-    shock_facts = "AGRICULTURAL INPUT PRICES:\n" + (
-        "\n".join(
-            f"- {s['input_type']}: {s['trend_pct']:+.0f}%. "
-            f"{s['shock_reason']}"
-            for s in shocks
-        ) or "- No significant input price shocks detected today."
+    shock_list = [s for s in shocks]
+    shock_facts = "INPUTS & RISKS:\n" + (
+        "\n".join(f"- {s.get('input_type','inputs').title()}: {s['shock_reason']}"
+                  for s in shock_list)
+        or "- No significant shocks detected."
     )
+    if pest_note:
+        shock_facts += f"\n- PEST: {pest_note}"
 
     prompt = (
-        f"{weather_facts}\n\n"
-        f"{market_facts}\n\n"
-        f"{shock_facts}\n\n"
-        f"Write a farmer advisory in {language} as JSON:\n"
-        f"{{\"weather_section\":\"...\","
-        f"\"market_section\":\"...\","
-        f"\"shock_section\":\"...\"}}"
+        f"{weather_facts}\n\n{market_facts}\n\n{shock_facts}\n\n"
+        f"Write advisory in {language} for {stage.value} stage of {crop}. "
+        f"Respond ONLY as JSON: "
+        f"{{\"weather_section\":\"...\",\"market_section\":\"...\",\"shock_section\":\"...\"}}"
     )
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -490,102 +817,74 @@ async def generate_advisory(
             raw = raw[4:]
     return json.loads(raw.strip())
 
-
-def _template_advisory(
-    district, weather, scores, crop_prices, shocks, crop
-):
-    """Fallback when no Anthropic key is configured."""
-    action = get_action(crop, scores)
-    market = (
-        f"{crop_prices[0]['crop'].title()} at "
-        f"{crop_prices[0]['price_local']:.0f} "
-        f"{crop_prices[0]['currency']}/{crop_prices[0]['unit']} "
-        f"— {crop_prices[0]['trend'].value}."
+def _template_advisory(district, weather, scores, crop_prices, shocks, pest_alerts, crop):
+    action = get_action(crop, scores, district)
+    stage  = scores["growth_stage"]
+    cascade = (" WARNING: multiple hazards simultaneously." if scores["cascade"] else "")
+    market  = (
+        f"{crop_prices[0]['crop'].title()} at {crop_prices[0]['price_local']:.0f} "
+        f"{crop_prices[0]['currency']}/{crop_prices[0]['unit']} — {crop_prices[0]['trend'].value}."
         if crop_prices else "No market data available today."
     )
-    shock = (
-        f"Alert: {shocks[0]['input_type']} {shocks[0]['trend_pct']:+.0f}%. "
-        f"{shocks[0]['shock_reason']}"
-        if shocks else "No input price alerts today."
-    )
+    all_alerts = [s["shock_reason"] for s in shocks] + [a["message"] for a in pest_alerts[:1]]
+    shock = " ".join(all_alerts) if all_alerts else "No alerts today."
     return {
         "weather_section": (
-            f"Rainfall forecast: {weather['rain_7d_mm']:.0f}mm over 7 days. "
-            f"Hazard level: {scores['composite'].value}. "
-            f"Recommended action: {action}."
+            f"[{stage.value.upper()}] Rain: {weather['rain_7d_mm']:.0f}mm/7d, "
+            f"SPI: {weather['spi']:+.1f}. Hazard: {scores['composite'].value}.{cascade} "
+            f"Action: {action}"
         ),
         "market_section": market,
         "shock_section":  shock,
     }
 
+# ── STEP 8: VOICE NOTE ────────────────────────────────────────────────────────
 
-# ── STEP 7: GENERATE VOICE NOTE (FREE — gTTS) ─────────────────────────────────
-
-def generate_voice_note(advisory, language, district_name):
-    """
-    Convert advisory text to a voice note using gTTS.
-    Completely free — uses Google Translate TTS, no API key needed.
-    Returns path to the temporary audio file.
-    Language is determined automatically by the district language setting.
-    """
-    gtts_lang = LANGUAGE_TO_GTTS.get(language.lower(), "en")
-
-    # Build a natural spoken version of the advisory
+def generate_voice_note(advisory, language, district_name, crop, stage):
+    gtts_lang   = LANGUAGE_TO_GTTS.get(language.lower(), "en")
     spoken_text = (
         f"AgriEWS advisory for {district_name}. "
-        f"{advisory['weather_section']} "
-        f"{advisory['market_section']} "
-        f"{advisory['shock_section']} "
-        f"This message is free from AgriEWS."
+        f"Crop: {crop}, stage: {stage.value}. "
+        f"{advisory['weather_section']}. "
+        f"{advisory['market_section']}. "
+        f"{advisory['shock_section']}. "
+        f"This advisory is free from AgriEWS."
     )
-
-    # Generate audio to a temporary file
-    tts       = gTTS(text=spoken_text, lang=gtts_lang, slow=False)
-    tmp_file  = tempfile.NamedTemporaryFile(
+    tts      = gTTS(text=spoken_text, lang=gtts_lang, slow=False)
+    tmp_file = tempfile.NamedTemporaryFile(
         suffix=".mp3", delete=False, prefix="agriews_"
     )
     tts.save(tmp_file.name)
-
-    logger.info("voice_note_generated",
-                language=language,
-                gtts_lang=gtts_lang,
-                file=tmp_file.name)
-
+    logger.info("voice_note_generated", language=language, gtts_lang=gtts_lang)
     return tmp_file.name
 
+# ── STEP 9: DELIVER ───────────────────────────────────────────────────────────
 
-# ── STEP 8: DELIVER VIA WHATSAPP ──────────────────────────────────────────────
-
-async def deliver_whatsapp(farmer, advisory, crop, hazard_level, district):
-    """
-    Sends two WhatsApp messages to the farmer:
-    1. The full text advisory
-    2. A voice note in the farmer's language (if voice_notes=True)
-    """
+async def deliver_whatsapp(farmer, advisory, crop, scores, district):
     LABELS = {
-        HazardLevel.NONE:    "All clear",
-        HazardLevel.LOW:     "Low risk",
-        HazardLevel.MEDIUM:  "Watch",
-        HazardLevel.HIGH:    "Alert",
-        HazardLevel.EXTREME: "Danger",
+        HazardLevel.NONE:"All clear", HazardLevel.LOW:"Low risk",
+        HazardLevel.MEDIUM:"Watch",   HazardLevel.HIGH:"Alert",
+        HazardLevel.EXTREME:"Danger",
     }
+    hazard_level = scores["composite"]
+    stage        = scores["growth_stage"]
+    cascade_line = ("\n⚠️ *MULTIPLE HAZARDS — elevated risk*"
+                    if scores["cascade"] else "")
+    stale_line   = ("\n_Note: data may be up to 72h old_"
+                    if district.get("data_stale") else "")
 
-    # -- Message 1: text advisory --
     message = (
-        f"*AgriEWS Advisory* | "
-        f"{date.today().strftime('%d %b %Y')} | "
-        f"{crop.title()}\n"
-        f"Status: *{LABELS[hazard_level]}*\n\n"
+        f"*AgriEWS Advisory* | {date.today().strftime('%d %b %Y')}\n"
+        f"*{district['name']}* | {crop.title()} | Stage: {stage.value}\n"
+        f"Status: *{LABELS[hazard_level]}*{cascade_line}{stale_line}\n\n"
         f"*Weather & Action*\n{advisory['weather_section']}\n\n"
         f"*Market*\n{advisory['market_section']}\n\n"
-        f"*Input Prices*\n{advisory['shock_section']}\n\n"
+        f"*Inputs & Alerts*\n{advisory['shock_section']}\n\n"
+        f"_Reply *REPORT* to send a field observation_\n"
         f"_AgriEWS is free | Reply STOP to unsubscribe_"
     )
 
-    url = (
-        f"https://graph.facebook.com/v19.0/"
-        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    )
+    url     = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
         "Content-Type":  "application/json",
@@ -593,7 +892,6 @@ async def deliver_whatsapp(farmer, advisory, crop, hazard_level, district):
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            # Send text message
             r = await client.post(
                 url,
                 json={
@@ -607,38 +905,22 @@ async def deliver_whatsapp(farmer, advisory, crop, hazard_level, district):
             r.raise_for_status()
             logger.info("whatsapp_text_sent", farmer=farmer["id"])
 
-            # Send voice note if enabled for this farmer
-            if farmer.get("voice_notes", False) and WHATSAPP_PHONE_NUMBER_ID:
+            if farmer.get("voice_notes") and WHATSAPP_PHONE_NUMBER_ID:
                 audio_path = None
                 try:
-                    # Generate voice note in farmer's language
                     audio_path = generate_voice_note(
-                        advisory,
-                        farmer["preferred_language"],
-                        district["name"],
+                        advisory, farmer["preferred_language"],
+                        district["name"], crop, stage,
                     )
-
-                    # Upload audio to WhatsApp media endpoint
-                    with open(audio_path, "rb") as audio_file:
-                        upload_r = await client.post(
-                            f"https://graph.facebook.com/v19.0/"
-                            f"{WHATSAPP_PHONE_NUMBER_ID}/media",
-                            headers={
-                                "Authorization": f"Bearer {WHATSAPP_API_TOKEN}"
-                            },
-                            files={
-                                "file": (
-                                    "advisory.mp3",
-                                    audio_file,
-                                    "audio/mpeg"
-                                )
-                            },
+                    with open(audio_path, "rb") as af:
+                        up = await client.post(
+                            f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_NUMBER_ID}/media",
+                            headers={"Authorization": f"Bearer {WHATSAPP_API_TOKEN}"},
+                            files={"file": ("advisory.mp3", af, "audio/mpeg")},
                             data={"messaging_product": "whatsapp"},
                         )
-                        upload_r.raise_for_status()
-                        media_id = upload_r.json().get("id")
-
-                    # Send audio message
+                        up.raise_for_status()
+                        media_id = up.json().get("id")
                     await client.post(
                         url,
                         json={
@@ -649,91 +931,119 @@ async def deliver_whatsapp(farmer, advisory, crop, hazard_level, district):
                         },
                         headers=headers,
                     )
-                    logger.info("voice_note_sent",
-                                farmer=farmer["id"],
-                                language=farmer["preferred_language"])
-
+                    logger.info("voice_note_sent", farmer=farmer["id"])
                 except Exception as e:
-                    logger.error("voice_note_failed",
-                                 farmer=farmer["id"], error=str(e))
+                    logger.error("voice_note_failed", farmer=farmer["id"], error=str(e))
                 finally:
-                    # Always delete the temp audio file to save disk space
                     if audio_path and os.path.exists(audio_path):
                         os.remove(audio_path)
-
         return "sent"
-
     except Exception as e:
-        logger.error("whatsapp_failed",
-                     farmer=farmer["id"], error=str(e))
+        logger.error("whatsapp_failed", farmer=farmer["id"], error=str(e))
         return "failed"
 
+# ── STEP 10: TWO-WAY MESSAGING ────────────────────────────────────────────────
+
+async def handle_farmer_report(farmer_phone: str, message: str):
+    report       = {
+        "phone":     farmer_phone,
+        "message":   message,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    message_lower = message.lower()
+    if any(w in message_lower for w in ["pest","insect","armyworm","locust"]):
+        report["type"] = "pest_sighting"
+    elif any(w in message_lower for w in ["flood","water","rain","river"]):
+        report["type"] = "flood_observation"
+    elif any(w in message_lower for w in ["dry","drought","no rain","wilting"]):
+        report["type"] = "drought_observation"
+    elif any(w in message_lower for w in ["price","market","expensive","cheap"]):
+        report["type"] = "market_observation"
+    else:
+        report["type"] = "general"
+
+    logger.info("farmer_report_received",
+                phone=farmer_phone, type=report["type"])
+
+    reports_key = f"farmer_reports_{date.today().isoformat()}"
+    existing    = cache_get(reports_key) or []
+    existing.append(report)
+    cache_set(reports_key, existing, ttl_hours=48)
+
+    return {
+        "report_type": report["type"],
+        "ack_message": (
+            "Thank you for your field report. "
+            "Your observation has been recorded and will help "
+            "improve advisories for your district. AgriEWS team."
+        ),
+    }
 
 # ── MAIN PIPELINE ─────────────────────────────────────────────────────────────
 
 async def run_pipeline():
-    logger.info("pipeline_starting", districts=len(DISTRICTS))
+    logger.info("agriews_v2_starting", districts=len(DISTRICTS))
 
     for district in DISTRICTS:
-        logger.info("district_starting", district=district["id"])
+        log = logger.bind(district=district["id"])
+        log.info("district_starting")
         try:
-            # Fetch all data
             weather     = await fetch_weather(
                 district["id"], district["lat"], district["lon"]
             )
             crop_prices = await fetch_market_prices(
                 district["id"], district["country_iso"], district["crops"]
             )
-            shocks      = await fetch_shocks(district["id"])
-            scores      = score_hazards(weather)
+            shocks      = await fetch_shocks(
+                district["id"], district["country_iso"],
+                district["lat"], district["lon"]
+            )
+            pest_alerts = await fetch_pest_alerts(
+                district["id"], district["country_iso"],
+                district["crops"], weather
+            )
 
-            logger.info("data_ready",
-                        district=district["id"],
-                        rain_7d=round(weather["rain_7d_mm"], 1),
-                        prices=len(crop_prices),
-                        shocks=len(shocks),
-                        hazard=scores["composite"].value)
+            log.info("all_data_fetched",
+                     rain_7d=round(weather["rain_7d_mm"],1),
+                     spi=weather["spi"],
+                     prices=len(crop_prices),
+                     shocks=len(shocks),
+                     pests=len(pest_alerts))
 
-            # Generate and deliver per farmer
-            farmers = [
-                f for f in FARMERS
-                if f["district_id"] == district["id"]
-            ]
+            farmers = [f for f in FARMERS if f["district_id"] == district["id"]]
 
             for farmer in farmers:
                 for crop in farmer["crops"]:
+                    stage   = get_growth_stage(crop, district["country_iso"])
+                    scores  = score_hazards(weather, pest_alerts, shocks, stage)
+
+                    log.info("hazards_scored", crop=crop, stage=stage.value,
+                             composite=scores["composite"].value,
+                             cascade=scores["cascade"])
+
                     advisory = await generate_advisory(
-                        district=district,
-                        weather=weather,
-                        scores=scores,
-                        crop_prices=crop_prices,
-                        shocks=shocks,
-                        language=farmer["preferred_language"],
-                        crop=crop,
+                        district=district, weather=weather, scores=scores,
+                        crop_prices=crop_prices, shocks=shocks,
+                        pest_alerts=pest_alerts,
+                        language=farmer["preferred_language"], crop=crop,
                     )
 
                     if farmer["preferred_channel"] == Channel.WHATSAPP:
                         status = await deliver_whatsapp(
-                            farmer=farmer,
-                            advisory=advisory,
-                            crop=crop,
-                            hazard_level=scores["composite"],
-                            district=district,
+                            farmer=farmer, advisory=advisory, crop=crop,
+                            scores=scores, district=district,
                         )
 
-                    logger.info("advisory_delivered",
-                                farmer=farmer["id"],
-                                crop=crop,
-                                language=farmer["preferred_language"],
-                                voice_note=farmer.get("voice_notes", False),
-                                status=status)
+                    log.info("advisory_delivered", farmer=farmer["id"],
+                             crop=crop, stage=stage.value,
+                             composite=scores["composite"].value,
+                             status=status)
 
         except Exception as e:
-            logger.error("district_failed",
-                         district=district["id"], error=str(e))
+            log.error("district_failed", error=str(e))
             continue
 
-    logger.info("pipeline_complete")
+    logger.info("agriews_v2_complete")
 
 
 if __name__ == "__main__":
