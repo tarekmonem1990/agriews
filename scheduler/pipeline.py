@@ -204,6 +204,43 @@ async def fetch_weather(district_id, lat, lon):
 
 # ── STEP 2: FETCH MARKET PRICES ───────────────────────────────────────────────
 
+async def fetch_market_prices(district_id, country_iso, crops):
+    """
+    Fetch crop prices from WFP DataBridges (primary) and FEWS NET (secondary).
+    Both free, no API key needed. Results merged and deduplicated.
+    """
+    cache_key = f"market_{district_id}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
+    prices = []
+
+    # Source 1: WFP DataBridges
+    try:
+        vam_prices = await _fetch_wfp_vam(district_id, country_iso, crops)
+        prices.extend(vam_prices)
+        logger.info("wfp_vam_fetched",
+                    district=district_id, count=len(vam_prices))
+    except Exception as e:
+        logger.warning("wfp_vam_failed", error=str(e))
+
+    # Source 2: FEWS NET
+    try:
+        fews_prices = await _fetch_fews_net(district_id, country_iso, crops)
+        existing_crops = {p["crop"] for p in prices}
+        new_fews = [p for p in fews_prices
+                    if p["crop"] not in existing_crops]
+        prices.extend(new_fews)
+        logger.info("fews_net_fetched",
+                    district=district_id, count=len(fews_prices))
+    except Exception as e:
+        logger.warning("fews_net_failed", error=str(e))
+
+    if prices:
+        cache_set(cache_key, prices, ttl_hours=12)
+
+    return prices
 async def _fetch_wfp_vam(district_id, country_iso, crops):
     # WFP DataBridges API v2 — replaced old VAM endpoint
     url    = "https://api.wfp.org/vam-data-bridges/7.0.0/MarketPrices/PriceMonthly"
