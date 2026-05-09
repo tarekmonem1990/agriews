@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgriEWS Control Room</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#ffffff;--bg2:#f8f7f4;--bg3:#f1efe8;
+  --text:#1a1a18;--text2:#5f5e5a;--text3:#888780;
+  --border:#e0dfd8;--border2:#c8c7c0;
+  --green:#1D9E75;--green-bg:#EAF3DE;--green-text:#3B6D11;
+  --amber:#EF9F27;--amber-bg:#FAEEDA;--amber-text:#854F0B;
+  --red:#E24B4A;--red-bg:#FCEBEB;--red-text:#A32D2D;
+  --blue:#378ADD;--blue-bg:#E6F1FB;--blue-text:#185FA5;
+  --radius:8px;--radius-lg:12px;
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    --bg:#1c1c1a;--bg2:#242422;--bg3:#2c2c2a;
+    --text:#f0efe8;--text2:#b4b2a9;--text3:#888780;
+    --border:#3a3a38;--border2:#4a4a48;
+    --green-bg:#085041;--green-text:#9FE1CB;
+    --amber-bg:#633806;--amber-text:#FAC775;
+    --red-bg:#501313;--red-text:#F09595;
+    --blue-bg:#0C447C;--blue-text:#B5D4F4;
+  }
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg3);color:var(--text);font-size:14px;line-height:1.5}
+.layout{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+.sidebar{background:var(--bg);border-right:1px solid var(--border);padding:0;position:sticky;top:0;height:100vh;overflow-y:auto}
+.sidebar-logo{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.logo-icon{width:28px;height:28px;background:var(--green);border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px}
+.logo-text{font-size:14px;font-weight:600;color:var(--text)}
+.logo-sub{font-size:11px;color:var(--text3)}
+.nav-section{padding:8px 0}
+.nav-label{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);padding:8px 16px 4px}
+.nav-item{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;color:var(--text2);font-size:13px;border-left:2px solid transparent}
+.nav-item:hover{background:var(--bg2);color:var(--text)}
+.nav-item.active{background:var(--bg2);color:var(--text);border-left-color:var(--green);font-weight:500}
+.nav-icon{font-size:15px;width:18px;text-align:center}
+.main{padding:24px;display:flex;flex-direction:column;gap:20px}
+.page{display:none}
+.page.active{display:flex;flex-direction:column;gap:20px}
+.page-header{display:flex;align-items:center;justify-content:space-between}
+.page-title{font-size:20px;font-weight:600;color:var(--text)}
+.page-sub{font-size:13px;color:var(--text3);margin-top:2px}
+.btn{padding:8px 16px;border-radius:var(--radius);border:1px solid var(--border2);background:var(--bg);cursor:pointer;font-size:13px;color:var(--text2);display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:var(--bg2)}
+.btn-primary{background:var(--green);color:#fff;border-color:var(--green)}
+.btn-primary:hover{background:#17875f}
+.btn-danger{color:var(--red-text);border-color:var(--red)}
+.btn-danger:hover{background:var(--red-bg)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.metric{background:var(--bg);border-radius:var(--radius-lg);border:1px solid var(--border);padding:16px}
+.metric-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.metric-val{font-size:26px;font-weight:600;color:var(--text)}
+.metric-sub{font-size:11px;color:var(--text2);margin-top:3px}
+.card{background:var(--bg);border-radius:var(--radius-lg);border:1px solid var(--border);overflow:hidden}
+.card-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg2)}
+.card-title{font-size:13px;font-weight:500;color:var(--text)}
+.card-body{padding:16px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 12px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);border-bottom:1px solid var(--border);background:var(--bg2)}
+td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text2)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg2)}
+.badge{display:inline-block;font-size:11px;font-weight:500;padding:2px 8px;border-radius:4px}
+.badge-extreme{background:var(--red-bg);color:var(--red-text)}
+.badge-high{background:var(--amber-bg);color:var(--amber-text)}
+.badge-medium{background:var(--blue-bg);color:var(--blue-text)}
+.badge-low{background:var(--green-bg);color:var(--green-text)}
+.badge-none{background:var(--bg3);color:var(--text3)}
+.badge-ok{background:var(--green-bg);color:var(--green-text)}
+.badge-warn{background:var(--amber-bg);color:var(--amber-text)}
+.badge-err{background:var(--red-bg);color:var(--red-text)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.dot-ok{background:var(--green)}
+.dot-warn{background:var(--amber)}
+.dot-err{background:var(--red)}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--bg);border-radius:var(--radius-lg);border:1px solid var(--border);width:520px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:15px;font-weight:600;color:var(--text)}
+.modal-close{cursor:pointer;color:var(--text3);font-size:20px;line-height:1;background:none;border:none;padding:0}
+.modal-body{padding:20px}
+.modal-footer{padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+.form-group{margin-bottom:14px}
+.form-label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:5px}
+.form-label span{color:var(--red);margin-left:2px}
+input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text);font-size:13px}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green)}
+.form-hint{font-size:11px;color:var(--text3);margin-top:3px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.checkbox-group{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.checkbox-item{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer}
+.checkbox-item input[type=checkbox]{width:auto}
+.source-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.source-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.source-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
+.source-name{font-size:12px;font-weight:500;color:var(--text)}
+.source-detail{font-size:11px;color:var(--text3);line-height:1.5}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--text);color:var(--bg);padding:10px 18px;border-radius:var(--radius);font-size:13px;z-index:200;opacity:0;transition:opacity .3s}
+.toast.show{opacity:1}
+.empty-state{text-align:center;padding:40px 20px;color:var(--text3)}
+.empty-state .empty-icon{font-size:36px;margin-bottom:10px}
+.empty-state p{font-size:13px}
+.pipeline-step{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
+.pipeline-step:last-child{border-bottom:none}
+.step-icon{font-size:14px;width:20px;text-align:center}
+.step-text{flex:1;font-size:13px;color:var(--text2)}
+.step-time{font-size:11px;color:var(--text3);min-width:55px;text-align:right}
+</style>
+</head>
+<body>
+
+<div class="layout">
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">🌾</div>
+    <div>
+      <div class="logo-text">AgriEWS</div>
+      <div class="logo-sub">Control Room</div>
+    </div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Overview</div>
+    <div class="nav-item active" onclick="showPage('overview')">
+      <span class="nav-icon">📊</span>Dashboard
+    </div>
+    <div class="nav-item" onclick="showPage('pipeline')">
+      <span class="nav-icon">⚙️</span>Pipeline runs
+    </div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Registry</div>
+    <div class="nav-item" onclick="showPage('districts')">
+      <span class="nav-icon">📍</span>Districts
+    </div>
+    <div class="nav-item" onclick="showPage('farmers')">
+      <span class="nav-icon">👨‍🌾</span>Farmers
+    </div>
+    <div class="nav-item" onclick="showPage('crops')">
+      <span class="nav-icon">🌱</span>Crops
+    </div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">Intelligence</div>
+    <div class="nav-item" onclick="showPage('sources')">
+      <span class="nav-icon">🔌</span>Data sources
+    </div>
+    <div class="nav-item" onclick="showPage('reports')">
+      <span class="nav-icon">📨</span>Field reports
+    </div>
+  </div>
+  <div class="nav-section" style="margin-top:auto;border-top:1px solid var(--border)">
+    <div style="padding:12px 16px;font-size:11px;color:var(--text3)">
+      AgriEWS v2.2 · Free for farmers
+    </div>
+  </div>
+</nav>
+
+<main class="main">
+
+<!-- OVERVIEW PAGE -->
+<div id="page-overview" class="page active">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Dashboard</div>
+      <div class="page-sub" id="last-updated">Loading...</div>
+    </div>
+    <button class="btn" onclick="loadAll()">↻ Refresh</button>
+  </div>
+  <div class="metrics" id="overview-metrics">
+    <div class="metric"><div class="metric-label">Districts</div><div class="metric-val" id="m-districts">—</div><div class="metric-sub">Active</div></div>
+    <div class="metric"><div class="metric-label">Farmers</div><div class="metric-val" id="m-farmers">—</div><div class="metric-sub">Registered</div></div>
+    <div class="metric"><div class="metric-label">Crops tracked</div><div class="metric-val" id="m-crops">—</div><div class="metric-sub">Across all districts</div></div>
+    <div class="metric"><div class="metric-label">Pipeline runs</div><div class="metric-val" id="m-runs">—</div><div class="metric-sub">Total logged</div></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><span class="card-title">District status</span></div>
+    <table>
+      <thead><tr><th>District</th><th>Country</th><th>Hazard</th><th>SPI</th><th>Farmers</th><th>Last run</th><th>Crops</th></tr></thead>
+      <tbody id="overview-districts"><tr><td colspan="7" style="text-align:center;color:var(--text3);padding:20px">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-head"><span class="card-title">Recent pipeline runs</span></div>
+    <table>
+      <thead><tr><th>District</th><th>Time</th><th>Status</th><th>Hazard</th><th>SPI</th><th>Advisories</th></tr></thead>
+      <tbody id="overview-runs"><tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- DISTRICTS PAGE -->
+<div id="page-districts" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Districts</div>
+      <div class="page-sub">Manage monitoring districts</div>
+    </div>
+    <button class="btn btn-primary" onclick="openModal('district')">+ Add district</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Name</th><th>Country</th><th>Region</th><th>Coords</th><th>Crops</th><th>Language</th><th>Farmers</th><th>Fragile</th><th></th></tr></thead>
+      <tbody id="districts-table"><tr><td colspan="9" style="text-align:center;color:var(--text3);padding:20px">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- FARMERS PAGE -->
+<div id="page-farmers" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Farmers</div>
+      <div class="page-sub">Registered farmers receiving advisories</div>
+    </div>
+    <button class="btn btn-primary" onclick="openModal('farmer')">+ Add farmer</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Name / ID</th><th>Phone</th><th>District</th><th>Language</th><th>Channel</th><th>Crops</th><th>Voice</th><th></th></tr></thead>
+      <tbody id="farmers-table"><tr><td colspan="8" style="text-align:center;color:var(--text3);padding:20px">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- CROPS PAGE -->
+<div id="page-crops" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Crops</div>
+      <div class="page-sub">Crop registry used across all districts</div>
+    </div>
+    <button class="btn btn-primary" onclick="openModal('crop')">+ Add crop</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>ID</th><th>Name</th><th>Local name</th><th>Category</th></tr></thead>
+      <tbody id="crops-table"><tr><td colspan="4" style="text-align:center;color:var(--text3);padding:20px">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- PIPELINE PAGE -->
+<div id="page-pipeline" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Pipeline runs</div>
+      <div class="page-sub">History of all pipeline executions</div>
+    </div>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>District</th><th>Time (UTC)</th><th>Status</th><th>Hazard</th><th>SPI</th><th>Rain</th><th>Prices</th><th>Shocks</th><th>Pests</th><th>Sent</th></tr></thead>
+      <tbody id="pipeline-table"><tr><td colspan="10" style="text-align:center;color:var(--text3);padding:20px">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- SOURCES PAGE -->
+<div id="page-sources" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Data sources</div>
+      <div class="page-sub">Status of all external data integrations</div>
+    </div>
+  </div>
+  <div class="source-grid">
+    <div class="source-card"><div class="source-top"><span class="source-name">Open-Meteo</span><span class="dot dot-ok"></span></div><div class="source-detail">Weather forecasts · Free · No key · 7-day global coverage</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">FAO GIEWS</span><span class="dot dot-warn"></span></div><div class="source-detail">Market prices · Free · No key · Limited country coverage</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">FEWS NET</span><span class="dot dot-warn"></span></div><div class="source-detail">Market prices · Free · No key · 30+ food-insecure countries</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">World Bank API</span><span class="dot dot-ok"></span></div><div class="source-detail">Fertilizer index · Free · No key · Monthly updates</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">ACLED</span><span class="dot dot-warn"></span></div><div class="source-detail">Conflict events · Free for NGOs · Key needed · acleddata.com</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">FAO FAMEWS</span><span class="dot dot-ok"></span></div><div class="source-detail">Fall armyworm · Free · No key · Global coverage</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">Anthropic API</span><span class="dot dot-warn"></span></div><div class="source-detail">Advisory AI · Paid · Key needed · console.anthropic.com</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">WhatsApp API</span><span class="dot dot-err"></span></div><div class="source-detail">Delivery · Free sandbox · Token needed · developers.facebook.com</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">WFP DataBridges</span><span class="dot dot-warn"></span></div><div class="source-detail">Market prices · Free · Key needed · wfp.vaminfo@wfp.org</div></div>
+    <div class="source-card"><div class="source-top"><span class="source-name">gTTS</span><span class="dot dot-ok"></span></div><div class="source-detail">Voice notes · Free · No key · 60+ languages</div></div>
+  </div>
+  <div class="card" style="margin-top:4px">
+    <div class="card-head"><span class="card-title">Keys to add in Railway Variables</span></div>
+    <div class="card-body">
+      <table>
+        <thead><tr><th>Variable</th><th>Where to get it</th><th>Priority</th></tr></thead>
+        <tbody>
+          <tr><td><code>WHATSAPP_API_TOKEN</code></td><td>developers.facebook.com → WhatsApp → API Setup</td><td><span class="badge badge-err">Required for delivery</span></td></tr>
+          <tr><td><code>WHATSAPP_PHONE_NUMBER_ID</code></td><td>Same as above</td><td><span class="badge badge-err">Required for delivery</span></td></tr>
+          <tr><td><code>ANTHROPIC_API_KEY</code></td><td>console.anthropic.com → API Keys</td><td><span class="badge badge-warn">Required for AI advisories</span></td></tr>
+          <tr><td><code>ACLED_API_KEY</code> + <code>ACLED_EMAIL</code></td><td>acleddata.com (free for NGOs)</td><td><span class="badge badge-ok">Recommended</span></td></tr>
+          <tr><td><code>WFP_TOKEN</code></td><td>Email wfp.vaminfo@wfp.org</td><td><span class="badge badge-ok">Recommended</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- REPORTS PAGE -->
+<div id="page-reports" class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Field reports</div>
+      <div class="page-sub">Inbound farmer observations via WhatsApp</div>
+    </div>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Time</th><th>Phone</th><th>District</th><th>Type</th><th>Message</th></tr></thead>
+      <tbody id="reports-table">
+        <tr><td colspan="5">
+          <div class="empty-state">
+            <div class="empty-icon">📨</div>
+            <p>No field reports yet.</p>
+            <p>Once WhatsApp is live, farmers can reply REPORT to send observations.</p>
+          </div>
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</main>
+</div>
+
+<!-- ADD DISTRICT MODAL -->
+<div class="modal-overlay" id="modal-district">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title">Add new district</span>
+      <button class="modal-close" onclick="closeModal('district')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">District name <span>*</span></label>
+          <input type="text" id="d-name" placeholder="e.g. Tigray Central">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Country ISO code <span>*</span></label>
+          <input type="text" id="d-country" placeholder="e.g. ET" maxlength="2" style="text-transform:uppercase">
+          <div class="form-hint">2-letter ISO code (SN, ET, KE, IN...)</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Region <span>*</span></label>
+        <select id="d-region">
+          <option value="west_africa">West Africa (Sahel)</option>
+          <option value="east_africa">East Africa</option>
+          <option value="horn_africa">Horn of Africa</option>
+          <option value="southern_africa">Southern Africa</option>
+          <option value="south_asia">South Asia</option>
+          <option value="southeast_asia">Southeast Asia</option>
+          <option value="middle_east">Middle East</option>
+          <option value="latin_america">Latin America</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Latitude <span>*</span></label>
+          <input type="number" id="d-lat" placeholder="e.g. 14.032" step="0.001">
+          <div class="form-hint">District centre coordinate</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Longitude <span>*</span></label>
+          <input type="number" id="d-lon" placeholder="e.g. 38.476" step="0.001">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Main crops <span>*</span></label>
+        <div class="checkbox-group" id="d-crops-check"></div>
+        <div class="form-hint">Select all crops grown in this district</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Advisory language <span>*</span></label>
+        <select id="d-language">
+          <option value="french">French</option>
+          <option value="english">English</option>
+          <option value="arabic">Arabic</option>
+          <option value="amharic">Amharic</option>
+          <option value="swahili">Swahili</option>
+          <option value="tigrinya">Tigrinya</option>
+          <option value="hausa">Hausa</option>
+          <option value="wolof">Wolof</option>
+          <option value="hindi">Hindi</option>
+          <option value="marathi">Marathi</option>
+          <option value="bengali">Bengali</option>
+          <option value="tamil">Tamil</option>
+          <option value="spanish">Spanish</option>
+          <option value="portuguese">Portuguese</option>
+          <option value="indonesian">Indonesian</option>
+          <option value="mandarin">Mandarin</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Timezone</label>
+          <input type="text" id="d-timezone" placeholder="e.g. Africa/Addis_Ababa" value="UTC">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Delivery channel</label>
+          <select id="d-channel">
+            <option value="whatsapp">WhatsApp</option>
+            <option value="sms">SMS</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="checkbox-item">
+          <input type="checkbox" id="d-fragile">
+          Mark as fragile context (enables conflict signal monitoring)
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('district')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitDistrict()">Add district</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD FARMER MODAL -->
+<div class="modal-overlay" id="modal-farmer">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title">Add new farmer</span>
+      <button class="modal-close" onclick="closeModal('farmer')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Name (optional)</label>
+          <input type="text" id="f-name" placeholder="Farmer name">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Phone number <span>*</span></label>
+          <input type="text" id="f-phone" placeholder="+221700000000">
+          <div class="form-hint">International format including country code</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">District <span>*</span></label>
+        <select id="f-district"></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Preferred language <span>*</span></label>
+          <select id="f-language">
+            <option value="french">French</option>
+            <option value="english">English</option>
+            <option value="arabic">Arabic</option>
+            <option value="amharic">Amharic</option>
+            <option value="swahili">Swahili</option>
+            <option value="tigrinya">Tigrinya</option>
+            <option value="hausa">Hausa</option>
+            <option value="wolof">Wolof</option>
+            <option value="hindi">Hindi</option>
+            <option value="marathi">Marathi</option>
+            <option value="spanish">Spanish</option>
+            <option value="portuguese">Portuguese</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Channel</label>
+          <select id="f-channel">
+            <option value="whatsapp">WhatsApp</option>
+            <option value="sms">SMS</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Crops <span>*</span></label>
+        <div class="checkbox-group" id="f-crops-check"></div>
+      </div>
+      <div class="form-group">
+        <label class="checkbox-item">
+          <input type="checkbox" id="f-voice" checked>
+          Send voice note advisory (in farmer's language)
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('farmer')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitFarmer()">Add farmer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD CROP MODAL -->
+<div class="modal-overlay" id="modal-crop">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title">Add new crop</span>
+      <button class="modal-close" onclick="closeModal('crop')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Crop name (English) <span>*</span></label>
+        <input type="text" id="c-name" placeholder="e.g. Cowpea">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Local name</label>
+        <input type="text" id="c-local" placeholder="e.g. Niébé">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select id="c-category">
+          <option value="cereal">Cereal</option>
+          <option value="legume">Legume</option>
+          <option value="root">Root / tuber</option>
+          <option value="vegetable">Vegetable</option>
+          <option value="oilseed">Oilseed</option>
+          <option value="cash">Cash crop</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('crop')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitCrop()">Add crop</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let allDistricts = [];
+let allFarmers  = [];
+let allCrops    = [];
+let allRuns     = [];
+
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch('/api' + path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+function toast(msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = ok ? '#1D9E75' : '#E24B4A';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.getAttribute('onclick').includes("'" + name + "'"))
+      n.classList.add('active');
+  });
+  if (name === 'districts') renderDistricts();
+  if (name === 'farmers')   renderFarmers();
+  if (name === 'crops')     renderCrops();
+  if (name === 'pipeline')  renderPipeline();
+  if (name === 'reports')   loadReports();
+}
+
+function openModal(type) {
+  if (type === 'district') loadCropCheckboxes('d-crops-check', []);
+  if (type === 'farmer') {
+    loadCropCheckboxes('f-crops-check', []);
+    const sel = document.getElementById('f-district');
+    sel.innerHTML = allDistricts.map(d =>
+      `<option value="${d.id}">${d.name} (${d.country_iso})</option>`
+    ).join('');
+  }
+  document.getElementById('modal-' + type).classList.add('open');
+}
+
+function closeModal(type) {
+  document.getElementById('modal-' + type).classList.remove('open');
+}
+
+function loadCropCheckboxes(containerId, selected) {
+  const c = document.getElementById(containerId);
+  c.innerHTML = allCrops.map(crop =>
+    `<label class="checkbox-item">
+      <input type="checkbox" value="${crop.id}" ${selected.includes(crop.id) ? 'checked' : ''}>
+      ${crop.name}
+    </label>`
+  ).join('');
+}
+
+function getChecked(containerId) {
+  return [...document.querySelectorAll(`#${containerId} input:checked`)].map(i => i.value);
+}
+
+async function submitDistrict() {
+  const crops = getChecked('d-crops-check');
+  if (!crops.length) { toast('Please select at least one crop', false); return; }
+  const data = {
+    name:      document.getElementById('d-name').value.trim(),
+    country_iso: document.getElementById('d-country').value.trim().toUpperCase(),
+    region:    document.getElementById('d-region').value,
+    lat:       document.getElementById('d-lat').value,
+    lon:       document.getElementById('d-lon').value,
+    crops,
+    languages: [document.getElementById('d-language').value],
+    channels:  [document.getElementById('d-channel').value],
+    timezone:  document.getElementById('d-timezone').value,
+    fragile:   document.getElementById('d-fragile').checked,
+  };
+  if (!data.name || !data.country_iso || !data.lat || !data.lon) {
+    toast('Please fill in all required fields', false); return;
+  }
+  try {
+    await api('POST', '/districts', data);
+    toast('District added successfully');
+    closeModal('district');
+    await loadAll();
+    showPage('districts');
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function submitFarmer() {
+  const crops = getChecked('f-crops-check');
+  if (!crops.length) { toast('Please select at least one crop', false); return; }
+  const data = {
+    name:       document.getElementById('f-name').value.trim(),
+    phone:      document.getElementById('f-phone').value.trim(),
+    district_id:document.getElementById('f-district').value,
+    language:   document.getElementById('f-language').value,
+    channel:    document.getElementById('f-channel').value,
+    crops,
+    voice_notes:document.getElementById('f-voice').checked,
+  };
+  if (!data.phone || !data.district_id) {
+    toast('Phone number and district are required', false); return;
+  }
+  try {
+    await api('POST', '/farmers', data);
+    toast('Farmer registered successfully');
+    closeModal('farmer');
+    await loadAll();
+    showPage('farmers');
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function submitCrop() {
+  const data = {
+    name:     document.getElementById('c-name').value.trim(),
+    name_local: document.getElementById('c-local').value.trim(),
+    category: document.getElementById('c-category').value,
+  };
+  if (!data.name) { toast('Crop name is required', false); return; }
+  try {
+    await api('POST', '/crops', data);
+    toast('Crop added successfully');
+    closeModal('crop');
+    await loadAll();
+    showPage('crops');
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function deleteDistrict(id) {
+  if (!confirm('Deactivate this district? Farmers will stop receiving advisories.')) return;
+  try {
+    await api('DELETE', '/districts/' + id);
+    toast('District deactivated');
+    await loadAll();
+    renderDistricts();
+  } catch(e) { toast('Error', false); }
+}
+
+async function deleteFarmer(id) {
+  if (!confirm('Remove this farmer?')) return;
+  try {
+    await api('DELETE', '/farmers/' + id);
+    toast('Farmer removed');
+    await loadAll();
+    renderFarmers();
+  } catch(e) { toast('Error', false); }
+}
+
+function hazardBadge(level) {
+  const l = (level || 'none').toLowerCase();
+  return `<span class="badge badge-${l}">${l}</span>`;
+}
+
+function renderDistricts() {
+  const tbody = document.getElementById('districts-table');
+  if (!allDistricts.length) {
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">📍</div><p>No districts yet. Add your first district.</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = allDistricts.map(d => `
+    <tr>
+      <td><strong>${d.name}</strong></td>
+      <td>${d.country_iso}</td>
+      <td>${d.region.replace(/_/g,' ')}</td>
+      <td style="font-size:12px;color:var(--text3)">${parseFloat(d.lat).toFixed(3)}, ${parseFloat(d.lon).toFixed(3)}</td>
+      <td style="font-size:12px">${JSON.parse(d.crops || '[]').join(', ')}</td>
+      <td>${JSON.parse(d.languages || '["?"]')[0]}</td>
+      <td>${d.farmers || 0}</td>
+      <td>${d.fragile ? '<span class="badge badge-err">Yes</span>' : '<span class="badge badge-none">No</span>'}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteDistrict('${d.id}')">Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+function renderFarmers() {
+  const tbody = document.getElementById('farmers-table');
+  if (!allFarmers.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">👨‍🌾</div><p>No farmers registered yet.</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = allFarmers.map(f => `
+    <tr>
+      <td><strong>${f.name || '—'}</strong><br><span style="font-size:11px;color:var(--text3)">${f.id}</span></td>
+      <td>${f.phone}</td>
+      <td>${f.district_id}</td>
+      <td>${f.preferred_language}</td>
+      <td>${f.preferred_channel}</td>
+      <td style="font-size:12px">${(f.crops || []).join(', ')}</td>
+      <td>${f.voice_notes ? '✓' : '—'}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteFarmer('${f.id}')">Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+function renderCrops() {
+  const tbody = document.getElementById('crops-table');
+  tbody.innerHTML = allCrops.map(c => `
+    <tr>
+      <td><code style="font-size:12px">${c.id}</code></td>
+      <td>${c.name}</td>
+      <td>${c.name_local || '—'}</td>
+      <td><span class="badge badge-none">${c.category || 'other'}</span></td>
+    </tr>
+  `).join('');
+}
+
+function renderPipeline() {
+  const tbody = document.getElementById('pipeline-table');
+  if (!allRuns.length) {
+    tbody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><div class="empty-icon">⚙️</div><p>No pipeline runs logged yet. Runs are logged automatically by the scheduler.</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = allRuns.map(r => `
+    <tr>
+      <td>${r.district_id || '—'}</td>
+      <td style="font-size:12px">${r.ran_at}</td>
+      <td>${r.status === 'ok' ? '<span class="badge badge-ok">ok</span>' : '<span class="badge badge-err">' + r.status + '</span>'}</td>
+      <td>${hazardBadge(r.hazard_level)}</td>
+      <td>${r.spi != null ? parseFloat(r.spi).toFixed(1) : '—'}</td>
+      <td>${r.rain_7d != null ? parseFloat(r.rain_7d).toFixed(0) + 'mm' : '—'}</td>
+      <td>${r.prices_count}</td>
+      <td>${r.shocks_count}</td>
+      <td>${r.pests_count}</td>
+      <td>${r.advisories_sent}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadReports() {
+  try {
+    const reports = await api('GET', '/reports');
+    const tbody = document.getElementById('reports-table');
+    if (!reports.length) return;
+    tbody.innerHTML = reports.map(r => `
+      <tr>
+        <td style="font-size:12px">${r.received_at}</td>
+        <td>${r.farmer_phone}</td>
+        <td>${r.district_id || '—'}</td>
+        <td><span class="badge badge-none">${r.report_type}</span></td>
+        <td>${r.message}</td>
+      </tr>
+    `).join('');
+  } catch(e) {}
+}
+
+function renderOverview() {
+  document.getElementById('m-districts').textContent = allDistricts.length;
+  document.getElementById('m-farmers').textContent   = allFarmers.length;
+  document.getElementById('m-crops').textContent     = allCrops.length;
+  document.getElementById('m-runs').textContent      = allRuns.length;
+
+  const tbody = document.getElementById('overview-districts');
+  tbody.innerHTML = allDistricts.map(d => {
+    const run = d.last_run;
+    return `<tr>
+      <td><strong>${d.name}</strong></td>
+      <td>${d.country_iso}</td>
+      <td>${run ? hazardBadge(run.hazard_level) : '<span class="badge badge-none">—</span>'}</td>
+      <td>${run && run.spi != null ? parseFloat(run.spi).toFixed(1) : '—'}</td>
+      <td>${d.farmers || 0}</td>
+      <td style="font-size:12px;color:var(--text3)">${run ? run.ran_at.split('T')[0] : 'Never'}</td>
+      <td style="font-size:12px">${JSON.parse(d.crops || '[]').join(', ')}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:20px">No districts yet</td></tr>';
+
+  const rbody = document.getElementById('overview-runs');
+  rbody.innerHTML = allRuns.slice(0,10).map(r => `
+    <tr>
+      <td>${r.district_id || '—'}</td>
+      <td style="font-size:12px">${r.ran_at}</td>
+      <td>${r.status === 'ok' ? '<span class="badge badge-ok">ok</span>' : '<span class="badge badge-err">' + r.status + '</span>'}</td>
+      <td>${hazardBadge(r.hazard_level)}</td>
+      <td>${r.spi != null ? parseFloat(r.spi).toFixed(1) : '—'}</td>
+      <td>${r.advisories_sent}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">No runs yet</td></tr>';
+
+  document.getElementById('last-updated').textContent =
+    'Last updated: ' + new Date().toUTCString();
+}
+
+async function loadAll() {
+  try {
+    [allDistricts, allFarmers, allCrops, allRuns] = await Promise.all([
+      api('GET', '/districts'),
+      api('GET', '/farmers'),
+      api('GET', '/crops'),
+      api('GET', '/pipeline/runs'),
+    ]);
+    renderOverview();
+  } catch(e) {
+    console.error('Load error:', e);
+  }
+}
+
+document.querySelectorAll('.modal-overlay').forEach(m =>
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); })
+);
+
+loadAll();
+</script>
+</body>
+</html>
