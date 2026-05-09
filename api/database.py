@@ -9,7 +9,7 @@ import os
 import json
 from datetime import datetime
 
-DB_PATH = os.getenv("DATABASE_PATH", "/tmp/agriews.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/app/agriews.db")
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
