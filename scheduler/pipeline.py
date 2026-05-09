@@ -394,11 +394,11 @@ async def _fetch_fao_giews(district_id, country_iso, crops):
     https://fpma.fao.org/giews/fpmat4/
     """
     iso3   = _iso2_to_iso3(country_iso)
-    url    = "https://fpma.fao.org/giews/fpmat4/api/v1/food-prices"
+    url    = "https://fpma.fao.org/giews/fpmat4/global/"
     params = {"iso3": iso3, "format": "json", "limit": 100}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(url, params=params)
+        r = await client.get(url, params=params, follow_redirects=True)
         r.raise_for_status()
         data = r.json()
 
