@@ -1,8 +1,7 @@
 """
 api/database.py
 Database models and connection for AgriEWS.
-Uses SQLite for simplicity (no extra setup needed on Railway).
-Automatically creates tables on first run.
+Uses SQLite — no extra setup needed on Railway.
 """
 import sqlite3
 import os
@@ -15,6 +14,35 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def _parse_list(value):
+    """Safely parse a value that could be JSON array or comma-separated string."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return value
+    value = value.strip()
+    if value.startswith('['):
+        try:
+            return json.loads(value)
+        except Exception:
+            pass
+    # Fallback: treat as comma-separated
+    return [v.strip() for v in value.split(',') if v.strip()]
+
+def _to_json(value):
+    """Ensure value is stored as proper JSON array string."""
+    if isinstance(value, list):
+        return json.dumps(value)
+    if isinstance(value, str):
+        if value.strip().startswith('['):
+            try:
+                json.loads(value)
+                return value
+            except Exception:
+                pass
+        return json.dumps([v.strip() for v in value.split(',') if v.strip()])
+    return json.dumps([])
 
 def init_db():
     conn = get_db()
@@ -131,6 +159,17 @@ def init_db():
             json.dumps(["whatsapp"]),
             "Africa/Dakar", 0
         ))
+    else:
+        # Fix any existing rows that have comma-separated instead of JSON
+        rows = conn.execute("SELECT id, crops, languages, channels FROM districts").fetchall()
+        for row in rows:
+            fixed_crops    = _to_json(row['crops'])
+            fixed_langs    = _to_json(row['languages'])
+            fixed_channels = _to_json(row['channels'])
+            conn.execute(
+                "UPDATE districts SET crops=?, languages=?, channels=? WHERE id=?",
+                (fixed_crops, fixed_langs, fixed_channels, row['id'])
+            )
 
     conn.commit()
     conn.close()
@@ -143,7 +182,14 @@ def get_all_districts():
         "SELECT * FROM districts WHERE active=1 ORDER BY name"
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        d['crops']     = _parse_list(d.get('crops', '[]'))
+        d['languages'] = _parse_list(d.get('languages', '[]'))
+        d['channels']  = _parse_list(d.get('channels', '[]'))
+        result.append(d)
+    return result
 
 def get_district(district_id):
     conn = get_db()
@@ -151,7 +197,13 @@ def get_district(district_id):
         "SELECT * FROM districts WHERE id=?", (district_id,)
     ).fetchone()
     conn.close()
-    return dict(row) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    d['crops']     = _parse_list(d.get('crops', '[]'))
+    d['languages'] = _parse_list(d.get('languages', '[]'))
+    d['channels']  = _parse_list(d.get('channels', '[]'))
+    return d
 
 def create_district(data):
     import re
@@ -167,16 +219,16 @@ def create_district(data):
         district_id,
         data['country_iso'].upper(),
         data['name'],
-        data.get('region','other'),
+        data.get('region', 'other'),
         float(data['lat']),
         float(data['lon']),
         json.dumps(data['crops'] if isinstance(data['crops'], list)
-                   else data['crops'].split(',')),
+                   else [c.strip() for c in data['crops'].split(',')]),
         json.dumps(data['languages'] if isinstance(data['languages'], list)
-                   else data['languages'].split(',')),
+                   else [l.strip() for l in data['languages'].split(',')]),
         json.dumps(data.get('channels', ['whatsapp']) if isinstance(data.get('channels'), list)
-                   else data.get('channels','whatsapp').split(',')),
-        data.get('timezone','UTC'),
+                   else [c.strip() for c in data.get('channels','whatsapp').split(',')]),
+        data.get('timezone', 'UTC'),
         1 if data.get('fragile') else 0
     ))
     conn.commit()
@@ -201,7 +253,12 @@ def get_farmers(district_id=None):
             "SELECT * FROM farmers WHERE active=1 ORDER BY district_id, name"
         ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        f = dict(r)
+        f['crops'] = _parse_list(f.get('crops', '[]'))
+        result.append(f)
+    return result
 
 def create_farmer(data):
     import uuid
@@ -215,12 +272,12 @@ def create_farmer(data):
     """, (
         farmer_id,
         data['district_id'],
-        data.get('name',''),
+        data.get('name', ''),
         data['phone'],
-        data.get('channel','whatsapp'),
-        data.get('language','french'),
+        data.get('channel', 'whatsapp'),
+        data.get('language', 'french'),
         json.dumps(data['crops'] if isinstance(data['crops'], list)
-                   else data['crops'].split(',')),
+                   else [c.strip() for c in data['crops'].split(',')]),
         1 if data.get('voice_notes', True) else 0
     ))
     conn.commit()
@@ -235,7 +292,9 @@ def delete_farmer(farmer_id):
 
 def get_crops():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM crops ORDER BY category, name").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM crops ORDER BY category, name"
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -246,7 +305,7 @@ def create_crop(data):
     conn.execute("""
         INSERT OR IGNORE INTO crops (id, name, name_local, category)
         VALUES (?,?,?,?)
-    """, (crop_id, data['name'], data.get('name_local',''), data.get('category','other')))
+    """, (crop_id, data['name'], data.get('name_local', ''), data.get('category', 'other')))
     conn.commit()
     conn.close()
     return crop_id
@@ -260,15 +319,15 @@ def log_pipeline_run(data):
         VALUES (?,?,?,?,?,?,?,?,?,?)
     """, (
         data.get('district_id'),
-        data.get('status','ok'),
+        data.get('status', 'ok'),
         data.get('rain_7d'),
         data.get('spi'),
         data.get('hazard_level'),
-        data.get('prices_count',0),
-        data.get('shocks_count',0),
-        data.get('pests_count',0),
-        data.get('advisories_sent',0),
-        data.get('notes',''),
+        data.get('prices_count', 0),
+        data.get('shocks_count', 0),
+        data.get('pests_count', 0),
+        data.get('advisories_sent', 0),
+        data.get('notes', ''),
     ))
     conn.commit()
     conn.close()
