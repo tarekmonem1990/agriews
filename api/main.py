@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import os, json
-from database import (
+from api.database import (
     init_db, get_all_districts, get_district, create_district, delete_district,
     get_farmers, create_farmer, delete_farmer,
     get_crops, create_crop,
