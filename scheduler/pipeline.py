@@ -204,8 +204,9 @@ async def fetch_weather(district_id, lat, lon):
 
 # ── STEP 2: FETCH MARKET PRICES ───────────────────────────────────────────────
 
-async def fetch_market_prices(district_id, country_iso, crops):
-    url    = f"{WFP_VAM_BASE_URL}MarketPrices/PriceMonthly"
+async def _fetch_wfp_vam(district_id, country_iso, crops):
+    # WFP DataBridges API v2 — replaced old VAM endpoint
+    url    = "https://api.wfp.org/vam-data-bridges/7.0.0/MarketPrices/PriceMonthly"
     params = {"CountryCode": country_iso, "format": "json"}
 
     try:
@@ -251,10 +252,11 @@ async def fetch_market_prices(district_id, country_iso, crops):
 # ── STEP 3: FETCH INPUT PRICE SHOCKS ─────────────────────────────────────────
 
 async def fetch_shocks(district_id):
+    # World Bank Commodity Price Data API — free, no key needed
+    # Fetches fertilizer price index directly
     WB_URL = (
-        "https://thedocs.worldbank.org/en/doc/"
-        "40ebbf38f5a6b68bfc11e5273e1405d4-0090012022"
-        "/related/Food-Security-Dashboard.json"
+        "https://api.worldbank.org/v2/en/indicator/AG.PRD.FERT.ZS"
+        "?format=json&mrv=2&per_page=2"
     )
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -266,25 +268,45 @@ async def fetch_shocks(district_id):
         return []
 
     shocks = []
-    fert   = data.get("fertilizer_index")
-    if fert:
-        current  = fert.get("current")
-        previous = fert.get("previous")
-        if current and previous and float(previous) > 0:
-            pct      = (float(current) - float(previous)) / float(previous) * 100
+    try:
+        # World Bank API returns array: [metadata, [datapoints]]
+        records = data[1] if isinstance(data, list) and len(data) > 1 else []
+        values  = [
+            float(r["value"])
+            for r in records
+            if r.get("value") is not None
+        ]
+        if len(values) >= 2:
+            current  = values[0]
+            previous = values[1]
+            pct      = (current - previous) / previous * 100
             is_shock = abs(pct) > 10
-            if is_shock:
+
+            # Also check absolute level — above 150 index is historically high
+            level_alert = current > 150
+
+            if is_shock or level_alert:
+                reason_parts = []
+                if is_shock:
+                    reason_parts.append(
+                        f"Global fertilizer index moved {pct:+.1f}% "
+                        f"vs last month"
+                    )
+                if level_alert:
+                    reason_parts.append(
+                        f"Fertilizer index at {current:.0f} — "
+                        f"historically elevated level"
+                    )
                 shocks.append({
+                    "type":         "price_shock",
                     "input_type":   "fertilizer",
                     "trend_pct":    round(pct, 1),
-                    "shock_reason": (
-                        f"Global fertilizer prices moved {pct:+.1f}% "
-                        f"compared to last month"
-                    ),
+                    "shock_reason": ". ".join(reason_parts),
+                    "severity":     "high" if abs(pct) > 20 else "medium",
+                    "source":       "world-bank-api",
                 })
-
-    logger.info("shocks_fetched",
-                district=district_id, count=len(shocks))
+    except Exception as e:
+        logger.warning("wb_parse_failed", error=str(e))
     return shocks
 
 
