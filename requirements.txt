@@ -6,3 +6,10 @@ apscheduler==3.10.4
 structlog==23.1.0
 python-dotenv==1.0.0
 gTTS==2.5.1
+numpy==1.26.4
+pandas==2.2.2
+requests==2.31.0
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+jinja2==3.1.2
