@@ -32,6 +32,8 @@ WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 AT_API_KEY               = os.getenv("AT_API_KEY", "")
 AT_USERNAME              = os.getenv("AT_USERNAME", "sandbox")
 AT_SENDER_ID             = os.getenv("AT_SENDER_ID", "AgriEWS")
+TELEGRAM_BOT_TOKEN       = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID         = os.getenv("TELEGRAM_CHAT_ID", "")
 
 CACHE_DIR = "/tmp/agriews_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -68,6 +70,7 @@ class HazardLevel(str, Enum):
 class Channel(str, Enum):
     SMS      = "sms"
     WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
 
 class TrendDirection(str, Enum):
     STABLE  = "stable"
@@ -247,6 +250,17 @@ FARMERS = [
         "preferred_language": "french",
         "crops":              ["groundnut", "millet"],
         "voice_notes":        True,
+    },
+    # Test farmer — Telegram delivery (you!)
+    {
+        "id":                 "test_telegram_001",
+        "district_id":        "sn_kaffrine_nord",
+        "phone":              "telegram",
+        "preferred_channel":  Channel.TELEGRAM,
+        "preferred_language": "french",
+        "crops":              ["groundnut", "millet"],
+        "voice_notes":        True,
+        "telegram_chat_id":   "8535333554",
     },
 ]
 
@@ -1212,6 +1226,96 @@ async def handle_farmer_report(farmer_phone: str, message: str):
         ),
     }
 
+
+# ── TELEGRAM DELIVERY ─────────────────────────────────────────────────────────
+
+async def deliver_telegram(farmer, advisory, crop, scores, district):
+    """
+    Send advisory via Telegram Bot API.
+    Completely free, no limits, no approval needed.
+    Sends text advisory + voice note in farmer language.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("telegram_no_token")
+        return "failed"
+
+    chat_id  = farmer.get("telegram_chat_id") or TELEGRAM_CHAT_ID
+    if not chat_id:
+        logger.warning("telegram_no_chat_id", farmer=farmer["id"])
+        return "failed"
+
+    LABELS = {
+        HazardLevel.NONE:    "كل شيء على ما يرام" if advisory.get("lang") == "arabic" else "All clear",
+        HazardLevel.LOW:     "خطر منخفض" if advisory.get("lang") == "arabic" else "Low risk",
+        HazardLevel.MEDIUM:  "مراقبة" if advisory.get("lang") == "arabic" else "Watch",
+        HazardLevel.HIGH:    "تحذير" if advisory.get("lang") == "arabic" else "Alert",
+        HazardLevel.EXTREME: "خطر شديد" if advisory.get("lang") == "arabic" else "Danger",
+    }
+
+    hazard_level = scores["composite"]
+    stage        = scores["growth_stage"]
+    cascade_line = (
+        "\n⚠️ *تحذير: مخاطر متعددة متزامنة*" if scores["cascade"] else ""
+    )
+
+    message = (
+        f"🌾 *AgriEWS Advisory* | {date.today().strftime('%d %b %Y')}\n"
+        f"📍 *{district['name']}* | {crop.title()} | {stage.value}\n"
+        f"🚨 Status: *{LABELS[hazard_level]}*"
+        f"{cascade_line}\n\n"
+        f"*🌦 Weather & Action*\n{advisory['weather_section']}\n\n"
+        f"*📈 Market*\n{advisory['market_section']}\n\n"
+        f"*⚡ Inputs & Alerts*\n{advisory['shock_section']}\n\n"
+        f"_Reply /report to send a field observation_\n"
+        f"_AgriEWS is free_"
+    )
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Send text message
+            r = await client.post(url, json={
+                "chat_id":    chat_id,
+                "text":       message,
+                "parse_mode": "Markdown",
+            })
+            r.raise_for_status()
+            logger.info("telegram_text_sent", farmer=farmer["id"], chat_id=chat_id)
+
+            # Send voice note if enabled
+            if farmer.get("voice_notes") and TELEGRAM_BOT_TOKEN:
+                audio_path = None
+                try:
+                    audio_path = generate_voice_note(
+                        advisory,
+                        farmer["preferred_language"],
+                        district["name"],
+                        crop,
+                        stage,
+                    )
+                    voice_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
+                    with open(audio_path, "rb") as af:
+                        vr = await client.post(
+                            voice_url,
+                            data={"chat_id": chat_id},
+                            files={"audio": ("advisory.mp3", af, "audio/mpeg")},
+                        )
+                        vr.raise_for_status()
+                    logger.info("telegram_voice_sent", farmer=farmer["id"])
+                except Exception as e:
+                    logger.error("telegram_voice_failed",
+                                 farmer=farmer["id"], error=str(e))
+                finally:
+                    if audio_path and os.path.exists(audio_path):
+                        os.remove(audio_path)
+
+        return "sent"
+
+    except Exception as e:
+        logger.error("telegram_failed", farmer=farmer["id"], error=str(e))
+        return "failed"
+
 # ── MAIN PIPELINE ─────────────────────────────────────────────────────────────
 
 async def run_pipeline():
@@ -1278,6 +1382,14 @@ async def run_pipeline():
 
                     if farmer["preferred_channel"] == Channel.WHATSAPP:
                         status = await deliver_whatsapp(
+                            farmer=farmer,
+                            advisory=advisory,
+                            crop=crop,
+                            scores=scores,
+                            district=district,
+                        )
+                    elif farmer["preferred_channel"] == Channel.TELEGRAM:
+                        status = await deliver_telegram(
                             farmer=farmer,
                             advisory=advisory,
                             crop=crop,
