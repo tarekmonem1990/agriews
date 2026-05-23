@@ -224,6 +224,20 @@ DISTRICTS = [
         "timezone":    "Africa/Dakar",
         "fragile":     False,
     },
+    # Irbid, Jordan
+    {
+        "id":          "jo_irbid",
+        "country_iso": "JO",
+        "name":        "Irbid",
+        "region":      "middle_east",
+        "lat":         32.55,
+        "lon":         35.85,
+        "crops":       ["wheat", "tomato", "olive"],
+        "languages":   ["arabic"],
+        "channels":    [Channel.TELEGRAM],
+        "timezone":    "Asia/Amman",
+        "fragile":     False,
+    },
     # Uncomment to add more districts:
     # {
     #     "id":          "et_tigray_central",
@@ -251,7 +265,7 @@ FARMERS = [
         "crops":              ["groundnut", "millet"],
         "voice_notes":        True,
     },
-    # Test farmer — Telegram delivery (you!)
+    # You — Kaffrine Nord (French)
     {
         "id":                 "test_telegram_001",
         "district_id":        "sn_kaffrine_nord",
@@ -259,6 +273,17 @@ FARMERS = [
         "preferred_channel":  Channel.TELEGRAM,
         "preferred_language": "french",
         "crops":              ["groundnut", "millet"],
+        "voice_notes":        True,
+        "telegram_chat_id":   "8535333554",
+    },
+    # You — Irbid (Arabic)
+    {
+        "id":                 "test_telegram_irbid",
+        "district_id":        "jo_irbid",
+        "phone":              "telegram",
+        "preferred_channel":  Channel.TELEGRAM,
+        "preferred_language": "arabic",
+        "crops":              ["wheat", "tomato", "olive"],
         "voice_notes":        True,
         "telegram_chat_id":   "8535333554",
     },
@@ -1010,220 +1035,168 @@ async def generate_advisory(
             raw = raw[4:]
     return json.loads(raw.strip())
 
-def _template_advisory(
-    district, weather, scores, crop_prices, shocks, pest_alerts, crop
-):
-    """Fallback template when no Anthropic API key is configured."""
-    action  = get_action(crop, scores, district)
-    stage   = scores["growth_stage"]
-    cascade = (
-        " WARNING: multiple hazards simultaneously."
-        if scores["cascade"] else ""
+# ── MULTILINGUAL TEMPLATES ────────────────────────────────────────────────────
+
+TRANSLATIONS = {
+    "french": {
+        "hazard_labels": {
+            "none":"Aucun risque","low":"Risque faible",
+            "medium":"Surveillance","high":"Alerte","extreme":"Danger extrême",
+        },
+        "stage_labels": {
+            "pre_season":"Pré-saison","planting":"Semis","vegetative":"Végétatif",
+            "flowering":"Floraison","grain_fill":"Remplissage",
+            "harvest":"Récolte","post_harvest":"Post-récolte",
+        },
+        "weather_intro":   "Prévisions météo sur 7 jours",
+        "rain_label":      "Pluie",
+        "spi_label":       "Indice de sécheresse (SPI)",
+        "below_normal":    "en dessous de la normale saisonnière",
+        "above_normal":    "au-dessus de la normale saisonnière",
+        "action_label":    "Action recommandée",
+        "cascade_warning": "ATTENTION : plusieurs risques simultanés.",
+        "stale_warning":   "Note : données météo pouvant avoir jusqu'à 72h.",
+        "market_no_data":  "Aucune donnée de prix disponible aujourd'hui.",
+        "shock_none":      "Aucune alerte sur les intrants aujourd'hui.",
+        "trend_labels": {
+            "stable":"stable","rising":"en hausse","falling":"en baisse",
+            "spike":"forte hausse","crash":"forte baisse",
+        },
+        "at":    "à",
+        "in":    "à",
+        "risk":  "Risque",
+        "level": "Niveau",
+    },
+    "arabic": {
+        "hazard_labels": {
+            "none":"لا توجد مخاطر","low":"خطر منخفض",
+            "medium":"مراقبة","high":"تحذير","extreme":"خطر شديد",
+        },
+        "stage_labels": {
+            "pre_season":"ما قبل الموسم","planting":"الزراعة",
+            "vegetative":"النمو الخضري","flowering":"الإزهار",
+            "grain_fill":"امتلاء الحبوب","harvest":"الحصاد",
+            "post_harvest":"ما بعد الحصاد",
+        },
+        "weather_intro":   "توقعات الطقس لـ 7 أيام",
+        "rain_label":      "هطول الأمطار",
+        "spi_label":       "مؤشر الجفاف",
+        "below_normal":    "أقل من المعدل الموسمي",
+        "above_normal":    "أعلى من المعدل الموسمي",
+        "action_label":    "الإجراء الموصى به",
+        "cascade_warning": "تحذير: مخاطر متعددة متزامنة — خطر مرتفع.",
+        "stale_warning":   "ملاحظة: بيانات الطقس قد تكون قديمة حتى 72 ساعة.",
+        "market_no_data":  "لا تتوفر بيانات أسعار اليوم.",
+        "shock_none":      "لا تحذيرات على مستلزمات الإنتاج اليوم.",
+        "trend_labels": {
+            "stable":"مستقر","rising":"ارتفاع","falling":"انخفاض",
+            "spike":"ارتفاع حاد","crash":"انخفاض حاد",
+        },
+        "at":    "في",
+        "in":    "في",
+        "risk":  "المستوى",
+        "level": "المستوى",
+    },
+    "english": {
+        "hazard_labels": {
+            "none":"All clear","low":"Low risk",
+            "medium":"Watch","high":"Alert","extreme":"Danger",
+        },
+        "stage_labels": {
+            "pre_season":"Pre-season","planting":"Planting",
+            "vegetative":"Vegetative","flowering":"Flowering",
+            "grain_fill":"Grain fill","harvest":"Harvest",
+            "post_harvest":"Post-harvest",
+        },
+        "weather_intro":   "7-day weather forecast",
+        "rain_label":      "Rainfall",
+        "spi_label":       "Drought index (SPI)",
+        "below_normal":    "below seasonal normal",
+        "above_normal":    "above seasonal normal",
+        "action_label":    "Recommended action",
+        "cascade_warning": "WARNING: multiple hazards simultaneously.",
+        "stale_warning":   "Note: weather data may be up to 72h old.",
+        "market_no_data":  "No market price data available today.",
+        "shock_none":      "No input price alerts today.",
+        "trend_labels": {
+            "stable":"stable","rising":"rising","falling":"falling",
+            "spike":"spike","crash":"crash",
+        },
+        "at":    "at",
+        "in":    "at",
+        "risk":  "Hazard",
+        "level": "Level",
+    },
+}
+
+def _get_t(language: str) -> dict:
+    return TRANSLATIONS.get(language.lower(), TRANSLATIONS["english"])
+
+
+def _template_advisory(district, weather, scores, crop_prices, shocks, pest_alerts, crop):
+    """
+    Multilingual template advisory — no Anthropic key needed.
+    Generates proper French, Arabic, or English based on farmer language.
+    """
+    language = district.get("languages", ["english"])
+    if isinstance(language, list):
+        language = language[0] if language else "english"
+    language = language.lower()
+
+    t            = _get_t(language)
+    action       = get_action(crop, scores, district)
+    stage        = scores["growth_stage"]
+    stage_label  = t["stage_labels"].get(stage.value, stage.value)
+    hazard_label = t["hazard_labels"].get(scores["composite"].value, scores["composite"].value)
+    spi_dir      = t["below_normal"] if weather["spi"] < 0 else t["above_normal"]
+    cascade      = f" {t['cascade_warning']}" if scores["cascade"] else ""
+    stale        = f" {t['stale_warning']}" if weather.get("data_stale") else ""
+
+    weather_section = (
+        f"[{stage_label}] {t['weather_intro']}: "
+        f"{t['rain_label']} {weather['rain_7d_mm']:.0f}mm / 7 jours. "
+        f"{t['spi_label']}: {weather['spi']:+.1f} ({spi_dir}). "
+        f"{t['risk']}: {hazard_label}.{cascade}{stale} "
+        f"{t['action_label']}: {action}"
+    ) if language == "french" else (
+        f"[{stage_label}] {t['weather_intro']}: "
+        f"{t['rain_label']} {weather['rain_7d_mm']:.0f} ملم / 7 أيام. "
+        f"{t['spi_label']}: {weather['spi']:+.1f} ({spi_dir}). "
+        f"{t['level']}: {hazard_label}.{cascade}{stale} "
+        f"{t['action_label']}: {action}"
+    ) if language == "arabic" else (
+        f"[{stage_label}] {t['weather_intro']}: "
+        f"{t['rain_label']} {weather['rain_7d_mm']:.0f}mm / 7 days. "
+        f"{t['spi_label']}: {weather['spi']:+.1f} ({spi_dir}). "
+        f"{t['risk']}: {hazard_label}.{cascade}{stale} "
+        f"{t['action_label']}: {action}"
     )
-    market = (
-        f"{crop_prices[0]['crop'].title()} at "
-        f"{crop_prices[0]['price_local']:.0f} "
-        f"{crop_prices[0]['currency']}/{crop_prices[0]['unit']} "
-        f"at {crop_prices[0]['market_name']} "
-        f"— {crop_prices[0]['trend'].value} ({crop_prices[0]['trend_pct']:+.0f}%)."
-        if crop_prices
-        else "No market price data available today."
-    )
+
+    if crop_prices:
+        p     = crop_prices[0]
+        trend = t["trend_labels"].get(
+            p["trend"].value if hasattr(p["trend"], "value") else p["trend"],
+            str(p["trend"])
+        )
+        market_section = (
+            f"{p['crop'].title()} {t['at']} {p['price_local']:.0f} "
+            f"{p['currency']}/{p['unit']} {t['in']} {p['market_name']} "
+            f"— {trend} ({p['trend_pct']:+.0f}%)."
+        )
+    else:
+        market_section = t["market_no_data"]
+
     all_alerts = (
         [s["shock_reason"] for s in shocks] +
         [a["message"] for a in pest_alerts[:1]]
     )
-    shock = " ".join(all_alerts) if all_alerts else "No alerts today."
+    shock_section = " ".join(all_alerts) if all_alerts else t["shock_none"]
 
     return {
-        "weather_section": (
-            f"[{stage.value.upper()}] "
-            f"Rain forecast: {weather['rain_7d_mm']:.0f}mm over 7 days. "
-            f"SPI: {weather['spi']:+.1f}. "
-            f"Hazard level: {scores['composite'].value}.{cascade} "
-            f"Action: {action}"
-        ),
-        "market_section": market,
-        "shock_section":  shock,
-    }
-
-# ── STEP 8: VOICE NOTE ────────────────────────────────────────────────────────
-
-def generate_voice_note(advisory, language, district_name, crop, stage):
-    """
-    Convert advisory to voice note using gTTS.
-    Completely free — uses Google Translate TTS, no API key needed.
-    Language is determined automatically by the district language setting.
-    """
-    gtts_lang   = LANGUAGE_TO_GTTS.get(language.lower(), "en")
-    spoken_text = (
-        f"AgriEWS advisory for {district_name}. "
-        f"Crop: {crop}, growth stage: {stage.value}. "
-        f"{advisory['weather_section']}. "
-        f"{advisory['market_section']}. "
-        f"{advisory['shock_section']}. "
-        f"This advisory is free from AgriEWS."
-    )
-    tts      = gTTS(text=spoken_text, lang=gtts_lang, slow=False)
-    tmp_file = tempfile.NamedTemporaryFile(
-        suffix=".mp3", delete=False, prefix="agriews_"
-    )
-    tts.save(tmp_file.name)
-    logger.info("voice_note_generated",
-                language=language, gtts_lang=gtts_lang)
-    return tmp_file.name
-
-# ── STEP 9: DELIVER ───────────────────────────────────────────────────────────
-
-async def deliver_whatsapp(farmer, advisory, crop, scores, district):
-    LABELS = {
-        HazardLevel.NONE:    "All clear",
-        HazardLevel.LOW:     "Low risk",
-        HazardLevel.MEDIUM:  "Watch",
-        HazardLevel.HIGH:    "Alert",
-        HazardLevel.EXTREME: "Danger",
-    }
-    hazard_level = scores["composite"]
-    stage        = scores["growth_stage"]
-    cascade_line = (
-        "\n⚠️ *MULTIPLE HAZARDS DETECTED — elevated risk*"
-        if scores["cascade"] else ""
-    )
-    stale_line = (
-        "\n_Note: weather data may be up to 72h old due to connectivity_"
-        if district.get("data_stale") else ""
-    )
-
-    message = (
-        f"*AgriEWS Advisory* | {date.today().strftime('%d %b %Y')}\n"
-        f"*{district['name']}* | {crop.title()} | Stage: {stage.value}\n"
-        f"Status: *{LABELS[hazard_level]}*"
-        f"{cascade_line}{stale_line}\n\n"
-        f"*Weather & Action*\n{advisory['weather_section']}\n\n"
-        f"*Market*\n{advisory['market_section']}\n\n"
-        f"*Inputs & Alerts*\n{advisory['shock_section']}\n\n"
-        f"_Reply *REPORT* to send a field observation_\n"
-        f"_AgriEWS is free | Reply STOP to unsubscribe_"
-    )
-
-    url = (
-        f"https://graph.facebook.com/v19.0/"
-        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    )
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
-        "Content-Type":  "application/json",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                url,
-                json={
-                    "messaging_product": "whatsapp",
-                    "to":   farmer["phone"],
-                    "type": "text",
-                    "text": {"body": message, "preview_url": False},
-                },
-                headers=headers,
-            )
-            r.raise_for_status()
-            logger.info("whatsapp_text_sent", farmer=farmer["id"])
-
-            if farmer.get("voice_notes") and WHATSAPP_PHONE_NUMBER_ID:
-                audio_path = None
-                try:
-                    audio_path = generate_voice_note(
-                        advisory,
-                        farmer["preferred_language"],
-                        district["name"],
-                        crop,
-                        stage,
-                    )
-                    with open(audio_path, "rb") as af:
-                        up = await client.post(
-                            f"https://graph.facebook.com/v19.0/"
-                            f"{WHATSAPP_PHONE_NUMBER_ID}/media",
-                            headers={
-                                "Authorization": f"Bearer {WHATSAPP_API_TOKEN}"
-                            },
-                            files={"file": ("advisory.mp3", af, "audio/mpeg")},
-                            data={"messaging_product": "whatsapp"},
-                        )
-                        up.raise_for_status()
-                        media_id = up.json().get("id")
-
-                    await client.post(
-                        url,
-                        json={
-                            "messaging_product": "whatsapp",
-                            "to":    farmer["phone"],
-                            "type":  "audio",
-                            "audio": {"id": media_id},
-                        },
-                        headers=headers,
-                    )
-                    logger.info("voice_note_sent", farmer=farmer["id"])
-                except Exception as e:
-                    logger.error("voice_note_failed",
-                                 farmer=farmer["id"], error=str(e))
-                finally:
-                    if audio_path and os.path.exists(audio_path):
-                        os.remove(audio_path)
-
-        return "sent"
-
-    except Exception as e:
-        logger.error("whatsapp_failed", farmer=farmer["id"], error=str(e))
-        return "failed"
-
-# ── STEP 10: TWO-WAY MESSAGING ────────────────────────────────────────────────
-
-async def handle_farmer_report(farmer_phone: str, message: str):
-    """
-    Process inbound farmer field reports.
-    Triggered when farmer replies REPORT to the advisory.
-    Classifies the observation and stores for aggregation.
-    """
-    message_lower = message.lower()
-
-    if any(w in message_lower for w in
-           ["pest", "insect", "armyworm", "locust", "caterpillar"]):
-        report_type = "pest_sighting"
-    elif any(w in message_lower for w in
-             ["flood", "water", "rain", "river", "waterlogged"]):
-        report_type = "flood_observation"
-    elif any(w in message_lower for w in
-             ["dry", "drought", "no rain", "wilting", "yellow"]):
-        report_type = "drought_observation"
-    elif any(w in message_lower for w in
-             ["price", "market", "expensive", "cheap", "shortage"]):
-        report_type = "market_observation"
-    else:
-        report_type = "general"
-
-    report = {
-        "phone":     farmer_phone,
-        "message":   message,
-        "type":      report_type,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-    logger.info("farmer_report_received",
-                phone=farmer_phone, type=report_type)
-
-    reports_key = f"farmer_reports_{date.today().isoformat()}"
-    existing    = cache_get(reports_key) or []
-    existing.append(report)
-    cache_set(reports_key, existing, ttl_hours=48)
-
-    return {
-        "report_type": report_type,
-        "ack_message": (
-            "Thank you for your field report. "
-            "Your observation has been recorded and will help "
-            "improve advisories for your district. AgriEWS team."
-        ),
+        "weather_section": weather_section,
+        "market_section":  market_section,
+        "shock_section":   shock_section,
+        "lang":            language,
     }
 
 
@@ -1356,55 +1329,76 @@ async def run_pipeline():
             ]
 
             for farmer in farmers:
-                for crop in farmer["crops"]:
-                    stage   = get_growth_stage(crop, district["country_iso"])
-                    scores  = score_hazards(weather, pest_alerts, shocks, stage)
+                # One combined advisory per farmer covering all their crops
+                # Use the highest-risk crop as the primary crop for scoring
+                primary_crop = farmer["crops"][0] if farmer["crops"] else "default"
+                stage  = get_growth_stage(primary_crop, district["country_iso"])
+                scores = score_hazards(weather, pest_alerts, shocks, stage)
 
-                    log.info("hazards_scored",
-                             crop=crop,
-                             stage=stage.value,
-                             drought=scores["drought_level"].value,
-                             flood=scores["flood_level"].value,
-                             pest=scores["pest_level"].value,
-                             composite=scores["composite"].value,
-                             cascade=scores["cascade"])
+                # Elevate scores for any additional crops
+                for extra_crop in farmer["crops"][1:]:
+                    extra_stage  = get_growth_stage(extra_crop, district["country_iso"])
+                    extra_scores = score_hazards(weather, pest_alerts, shocks, extra_stage)
+                    rank = {"none":0,"low":1,"medium":2,"high":3,"extreme":4}
+                    if rank[extra_scores["composite"].value] > rank[scores["composite"].value]:
+                        scores = extra_scores
+                        primary_crop = extra_crop
 
-                    advisory = await generate_advisory(
-                        district=district,
-                        weather=weather,
+                log.info("hazards_scored",
+                         farmer=farmer["id"],
+                         primary_crop=primary_crop,
+                         stage=stage.value,
+                         drought=scores["drought_level"].value,
+                         flood=scores["flood_level"].value,
+                         pest=scores["pest_level"].value,
+                         composite=scores["composite"].value,
+                         cascade=scores["cascade"])
+
+                # Pass farmer language to district for template
+                district_with_lang = {
+                    **district,
+                    "languages": [farmer["preferred_language"]],
+                }
+
+                advisory = await generate_advisory(
+                    district=district_with_lang,
+                    weather=weather,
+                    scores=scores,
+                    crop_prices=crop_prices,
+                    shocks=shocks,
+                    pest_alerts=pest_alerts,
+                    language=farmer["preferred_language"],
+                    crop=primary_crop,
+                )
+
+                if farmer["preferred_channel"] == Channel.WHATSAPP:
+                    status = await deliver_whatsapp(
+                        farmer=farmer,
+                        advisory=advisory,
+                        crop=primary_crop,
                         scores=scores,
-                        crop_prices=crop_prices,
-                        shocks=shocks,
-                        pest_alerts=pest_alerts,
-                        language=farmer["preferred_language"],
-                        crop=crop,
+                        district=district,
                     )
+                elif farmer["preferred_channel"] == Channel.TELEGRAM:
+                    status = await deliver_telegram(
+                        farmer=farmer,
+                        advisory=advisory,
+                        crop=primary_crop,
+                        scores=scores,
+                        district=district,
+                    )
+                else:
+                    status = "no_channel"
 
-                    if farmer["preferred_channel"] == Channel.WHATSAPP:
-                        status = await deliver_whatsapp(
-                            farmer=farmer,
-                            advisory=advisory,
-                            crop=crop,
-                            scores=scores,
-                            district=district,
-                        )
-                    elif farmer["preferred_channel"] == Channel.TELEGRAM:
-                        status = await deliver_telegram(
-                            farmer=farmer,
-                            advisory=advisory,
-                            crop=crop,
-                            scores=scores,
-                            district=district,
-                        )
-
-                    log.info("advisory_delivered",
-                             farmer=farmer["id"],
-                             crop=crop,
-                             stage=stage.value,
-                             composite=scores["composite"].value,
-                             cascade=scores["cascade"],
-                             voice_note=farmer.get("voice_notes", False),
-                             status=status)
+                log.info("advisory_delivered",
+                         farmer=farmer["id"],
+                         crop=primary_crop,
+                         stage=stage.value,
+                         language=farmer["preferred_language"],
+                         composite=scores["composite"].value,
+                         cascade=scores["cascade"],
+                         voice_note=farmer.get("voice_notes", False),
+                         status=status)
 
         except Exception as e:
             log.error("district_failed",
