@@ -1393,6 +1393,68 @@ def _template_advisory(district, weather, scores, crop_prices, shocks, pest_aler
     }
 
 
+
+# ── STEP 8: VOICE NOTE ────────────────────────────────────────────────────────
+
+def generate_voice_note(advisory, language, district_name, crop, stage):
+    """
+    Convert advisory to voice note using gTTS.
+    Free — no API key. Falls back to English if language TTS fails.
+    """
+    gtts_lang = LANGUAGE_TO_GTTS.get(language.lower(), "en")
+
+    def clean(text):
+        return (str(text).replace("*","").replace("_","")
+                         .replace("#","").replace("[","").replace("]",""))
+
+    intros = {
+        "french":  f"Bonjour, voici votre bulletin AgriEWS pour {district_name}.",
+        "arabic":  f"مرحباً، هذه نشرتكم الزراعية من AgriEWS لمنطقة {district_name}.",
+        "english": f"Hello, this is your AgriEWS advisory for {district_name}.",
+    }
+    outros = {
+        "french":  "Cette alerte est gratuite. Bonne journee.",
+        "arabic":  "هذه النشرة مجانية. يوم سعيد.",
+        "english": "This advisory is free. Have a good day.",
+    }
+
+    intro  = intros.get(language.lower(), intros["english"])
+    outro  = outros.get(language.lower(), outros["english"])
+    spoken = (
+        f"{intro} "
+        f"{clean(advisory['weather_section'])}. "
+        f"{clean(advisory['market_section'])}. "
+        f"{clean(advisory['shock_section'])}. "
+        f"{outro}"
+    )
+
+    tmp_file = tempfile.NamedTemporaryFile(
+        suffix=".mp3", delete=False, prefix="agriews_"
+    )
+
+    try:
+        tts = gTTS(text=spoken, lang=gtts_lang, slow=False)
+        tts.save(tmp_file.name)
+        logger.info("voice_note_generated",
+                    language=language, gtts_lang=gtts_lang)
+        return tmp_file.name
+    except Exception as e:
+        logger.warning("gtts_lang_failed", lang=gtts_lang, error=str(e))
+        try:
+            fallback = (
+                f"Hello, AgriEWS advisory for {district_name}. "
+                f"{clean(advisory['weather_section'])}. "
+                f"{clean(advisory['market_section'])}. "
+                f"{clean(advisory['shock_section'])}. Free advisory."
+            )
+            tts = gTTS(text=fallback, lang="en", slow=False)
+            tts.save(tmp_file.name)
+            logger.info("voice_note_fallback_english_ok")
+            return tmp_file.name
+        except Exception as e2:
+            logger.error("voice_note_failed_completely", error=str(e2))
+            return None
+
 # ── TELEGRAM DELIVERY ─────────────────────────────────────────────────────────
 
 async def deliver_telegram(farmer, advisory, crop, scores, district):
@@ -1483,6 +1545,112 @@ async def deliver_telegram(farmer, advisory, crop, scores, district):
         return "failed"
 
 # ── MAIN PIPELINE ─────────────────────────────────────────────────────────────
+
+# ── WHATSAPP DELIVERY ─────────────────────────────────────────────────────────
+
+async def deliver_whatsapp(farmer, advisory, crop, scores, district):
+    """Send advisory via WhatsApp Business API."""
+    if not WHATSAPP_API_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
+        logger.warning("whatsapp_no_token")
+        return "failed"
+
+    LABELS = {
+        HazardLevel.NONE:    "All clear",
+        HazardLevel.LOW:     "Low risk",
+        HazardLevel.MEDIUM:  "Watch",
+        HazardLevel.HIGH:    "Alert",
+        HazardLevel.EXTREME: "Danger",
+    }
+    hazard_level = scores["composite"]
+    stage        = scores["growth_stage"]
+    cascade_line = (
+        " | MULTIPLE HAZARDS"
+        if scores["cascade"] else ""
+    )
+
+    lines = [
+        f"*AgriEWS Advisory* | {date.today().strftime('%d %b %Y')}",
+        f"*{district['name']}* | {crop.title()} | Stage: {stage.value}",
+        f"Status: *{LABELS[hazard_level]}*{cascade_line}",
+        "",
+        "*Weather & Action*",
+        advisory['weather_section'],
+        "",
+        "*Market*",
+        advisory['market_section'],
+        "",
+        "*Inputs & Alerts*",
+        advisory['shock_section'],
+        "",
+        "_Reply REPORT to send a field observation_",
+        "_AgriEWS is free | Reply STOP to unsubscribe_",
+    ]
+    message = "\n".join(lines)
+
+    url = (
+        f"https://graph.facebook.com/v19.0/"
+        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    )
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
+        "Content-Type":  "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                url,
+                json={
+                    "messaging_product": "whatsapp",
+                    "to":   farmer["phone"],
+                    "type": "text",
+                    "text": {"body": message, "preview_url": False},
+                },
+                headers=headers,
+            )
+            r.raise_for_status()
+            logger.info("whatsapp_text_sent", farmer=farmer["id"])
+
+            if farmer.get("voice_notes") and WHATSAPP_PHONE_NUMBER_ID:
+                audio_path = None
+                try:
+                    audio_path = generate_voice_note(
+                        advisory, farmer["preferred_language"],
+                        district["name"], crop, stage,
+                    )
+                    if audio_path:
+                        with open(audio_path, "rb") as af:
+                            up = await client.post(
+                                f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_NUMBER_ID}/media",
+                                headers={"Authorization": f"Bearer {WHATSAPP_API_TOKEN}"},
+                                files={"file": ("advisory.mp3", af, "audio/mpeg")},
+                                data={"messaging_product": "whatsapp"},
+                            )
+                            up.raise_for_status()
+                            media_id = up.json().get("id")
+                        await client.post(
+                            url,
+                            json={
+                                "messaging_product": "whatsapp",
+                                "to":    farmer["phone"],
+                                "type":  "audio",
+                                "audio": {"id": media_id},
+                            },
+                            headers=headers,
+                        )
+                        logger.info("whatsapp_voice_sent", farmer=farmer["id"])
+                except Exception as e:
+                    logger.error("whatsapp_voice_failed",
+                                 farmer=farmer["id"], error=str(e))
+                finally:
+                    if audio_path and os.path.exists(audio_path):
+                        try: os.remove(audio_path)
+                        except: pass
+        return "sent"
+    except Exception as e:
+        logger.error("whatsapp_failed", farmer=farmer["id"], error=str(e))
+        return "failed"
+
 
 async def run_pipeline():
     logger.info("agriews_v2_starting", districts=len(DISTRICTS))
