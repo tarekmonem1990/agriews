@@ -268,7 +268,7 @@ FARMERS = [
     # You — Kaffrine Nord (French)
     {
         "id":                 "test_telegram_001",
-        "district_id":        "sn_kaffrine_nord",
+        "district_id":        "sn_kaffrine_nord",  # must match DISTRICTS id exactly
         "phone":              "telegram",
         "preferred_channel":  Channel.TELEGRAM,
         "preferred_language": "french",
@@ -829,11 +829,144 @@ def score_hazards(weather, pest_alerts, shocks, growth_stage):
 
 # ── STEP 6: AGRONOMIC ACTIONS ─────────────────────────────────────────────────
 
+
+# ── AGRONOMIC ACTION TABLES (MULTILINGUAL) ────────────────────────────────────
+
+ACTIONS = {
+    "english": {
+        "drought_flowering": {
+            "groundnut":"CRITICAL: drought at flowering reduces yield 50-70%. Irrigate immediately.",
+            "maize":    "CRITICAL: drought at silking causes permanent loss. Irrigate 25-50mm now.",
+            "wheat":    "CRITICAL: irrigate immediately — drought at flowering causes permanent yield loss.",
+            "tomato":   "CRITICAL: drought causes flower drop. Irrigate 20-30mm immediately.",
+            "default":  "CRITICAL: flowering is the most drought-sensitive stage. Irrigate immediately.",
+        },
+        "drought_grain_fill": {
+            "groundnut":"Irrigate to support pod filling. Plan early harvest if drought continues 10+ days.",
+            "wheat":    "Irrigate to support grain fill. Consider early harvest if no water available.",
+            "tomato":   "Maintain even soil moisture to prevent fruit cracking.",
+            "default":  "Irrigate to support grain fill. Plan early harvest if drought continues.",
+        },
+        "drought_vegetative": {
+            "groundnut":"Apply mulch to conserve moisture. Delay fertilizer until rain returns.",
+            "millet":   "Millet is drought-tolerant at this stage. Monitor for 7 more days.",
+            "sorghum":  "Sorghum tolerates drought here. Monitor for one more week.",
+            "olive":    "Olive is drought-tolerant. No action needed unless dry for 3+ weeks.",
+            "default":  "Apply mulch and delay fertilizer until rain returns.",
+        },
+        "drought_planting":   "Delay planting — wait for 20mm of rainfall before sowing. Seeds won't germinate in dry soil.",
+        "drought_harvest":    "Dry conditions favour harvest. Proceed if crop is mature. Dry grain below 13% moisture before storage.",
+        "drought_default":    "Conserve soil moisture — apply mulch, avoid tillage, delay fertilizer.",
+        "flood": {
+            "groundnut":"Clear drainage immediately. No fertilizer before heavy rain.",
+            "rice":     "Monitor paddy level — excess water beyond 15cm damages plants.",
+            "maize":    "Clear drainage — maize cannot tolerate waterlogging beyond 48 hours.",
+            "tomato":   "Ensure drainage — tomatoes are highly sensitive to waterlogging.",
+            "default":  "Clear drainage channels. No fertilizer or pesticide before heavy rain.",
+        },
+        "pest":         "Inspect {crop} fields today — conditions favour pest outbreaks. Check leaf undersides. Contact extension officer if 10%+ plants damaged.",
+        "stage_advice": {
+            "planting":    "Good planting conditions. Ensure seeds are treated before sowing.",
+            "vegetative":  "Favourable conditions. Good time for top-dressing if rain is forecast.",
+            "flowering":   "Critical stage — monitor closely and ensure adequate moisture.",
+            "grain_fill":  "Avoid crop stress. Continue normal management.",
+            "harvest":     "Monitor maturity. Prepare clean dry storage before harvesting.",
+            "post_harvest":"Good time to prepare land, source inputs, and plan next season.",
+            "default":     "Conditions are favourable — continue normal management.",
+        },
+    },
+    "french": {
+        "drought_flowering": {
+            "groundnut":"CRITIQUE: la sécheresse à la floraison réduit le rendement de 50-70%. Irriguer immédiatement.",
+            "maize":    "CRITIQUE: la sécheresse à la fécondation cause des pertes permanentes. Irriguer 25-50mm maintenant.",
+            "millet":   "CRITIQUE: irriguer immédiatement si possible. La floraison est le stade le plus sensible.",
+            "default":  "CRITIQUE: la floraison est le stade le plus sensible à la sécheresse. Irriguer immédiatement.",
+        },
+        "drought_grain_fill": {
+            "groundnut":"Irriguer pour le remplissage des gousses. Envisager une récolte précoce si la sécheresse dure 10+ jours.",
+            "millet":   "Irriguer si possible pour soutenir le remplissage des grains.",
+            "default":  "Irriguer pour soutenir le remplissage. Envisager une récolte précoce si nécessaire.",
+        },
+        "drought_vegetative": {
+            "groundnut":"Appliquer un paillis pour conserver l'humidité. Retarder les engrais jusqu'au retour de la pluie.",
+            "millet":   "Le mil est tolérant à la sécheresse à ce stade. Surveiller 7 jours supplémentaires.",
+            "sorghum":  "Le sorgho tolère la sécheresse ici. Surveiller une semaine de plus.",
+            "default":  "Appliquer un paillis et retarder les engrais jusqu'au retour de la pluie.",
+        },
+        "drought_planting":   "Retarder la plantation — attendre 20mm de pluie avant de semer. Les graines ne germent pas dans un sol sec.",
+        "drought_harvest":    "Les conditions sèches favorisent la récolte. Procéder si la culture est mature. Sécher les grains à moins de 13% d'humidité.",
+        "drought_default":    "Conserver l'humidité du sol — paillis, éviter le labour, retarder les engrais.",
+        "flood": {
+            "groundnut":"Dégager les canaux de drainage immédiatement. Ne pas appliquer d'engrais avant les fortes pluies.",
+            "rice":     "Surveiller le niveau d'eau — une eau excessive au-delà de 15cm endommage les plants.",
+            "maize":    "S'assurer du drainage — le maïs ne tolère pas l'engorgement plus de 48 heures.",
+            "default":  "Dégager les canaux de drainage. Pas d'engrais ou pesticides avant les fortes pluies.",
+        },
+        "pest":         "Inspecter les champs de {crop} aujourd'hui — conditions favorables aux infestations. Vérifier le dessous des feuilles. Contacter l'agent d'encadrement si 10%+ des plants sont touchés.",
+        "stage_advice": {
+            "planting":    "Bonnes conditions pour la plantation. S'assurer que les semences sont traitées.",
+            "vegetative":  "Conditions favorables. Bon moment pour l'engrais de couverture si pluie prévue.",
+            "flowering":   "Stade critique — surveiller de près et assurer une humidité adéquate.",
+            "grain_fill":  "Éviter tout stress à ce stade. Continuer la gestion normale.",
+            "harvest":     "Surveiller la maturité. Préparer un stockage propre et sec.",
+            "post_harvest":"Bon moment pour préparer les terres et planifier la prochaine saison.",
+            "default":     "Conditions favorables — continuer la gestion normale.",
+        },
+    },
+    "arabic": {
+        "drought_flowering": {
+            "wheat":    "تحذير حرج: الجفاف خلال الإزهار يقلل المحصول 50-70٪. الري الفوري ضروري.",
+            "tomato":   "تحذير حرج: الجفاف يسبب تساقط الأزهار. الري بـ 20-30 مم فوراً.",
+            "olive":    "تحذير: الزيتون حساس للجفاف في الإزهار. الري إذا توفرت مياه.",
+            "groundnut":"تحذير حرج: الجفاف خلال الإزهار يقلل المحصول بشدة. الري الفوري.",
+            "default":  "تحذير حرج: الإزهار هو أكثر المراحل حساسية للجفاف. الري الفوري ضروري.",
+        },
+        "drought_grain_fill": {
+            "wheat":  "الري لدعم امتلاء الحبوب. التخطيط للحصاد المبكر إذا استمر الجفاف 10+ أيام.",
+            "tomato": "الحفاظ على رطوبة منتظمة في التربة لمنع تشقق الثمار.",
+            "default":"الري لدعم امتلاء الحبوب. التخطيط لحصاد مبكر إذا استمر الجفاف.",
+        },
+        "drought_vegetative": {
+            "wheat":  "تطبيق التغطية العضوية للحفاظ على الرطوبة. تأجيل التسميد حتى عودة الأمطار.",
+            "tomato": "الري بانتظام مع تغطية التربة. تأجيل التسميد حتى تحسن الرطوبة.",
+            "olive":  "الزيتون متحمل للجفاف في هذه المرحلة. المراقبة أسبوعاً إضافياً.",
+            "default":"تطبيق التغطية العضوية وتأجيل التسميد حتى عودة الأمطار.",
+        },
+        "drought_planting":   "تأجيل الزراعة — انتظر هطول 20 مم على الأقل. البذور لن تنبت في تربة جافة.",
+        "drought_harvest":    "الظروف الجافة مناسبة للحصاد وتجفيف الحبوب. المضي في الحصاد إذا اكتملت النضج. تجفيف الحبوب إلى أقل من 13٪ رطوبة.",
+        "drought_default":    "الحفاظ على رطوبة التربة — تغطية عضوية، تجنب الحرث، تأجيل التسميد.",
+        "flood": {
+            "wheat":   "تنظيف قنوات الصرف فوراً. عدم إضافة أسمدة قبل الأمطار الغزيرة.",
+            "tomato":  "التحقق من الصرف — الطماطم حساسة جداً للتشبع بالماء.",
+            "olive":   "تنظيف قنوات الصرف — الزيتون لا يتحمل التشبع بالماء.",
+            "default": "تنظيف قنوات الصرف. عدم إضافة أسمدة أو مبيدات قبل الأمطار.",
+        },
+        "pest":         "فحص حقول {crop} اليوم — الظروف مواتية لتفشي الآفات. فحص الجهة السفلية من الأوراق. التواصل مع المرشد الزراعي إذا أُصيب أكثر من 10٪ من النباتات.",
+        "stage_advice": {
+            "planting":    "ظروف جيدة للزراعة. التأكد من معالجة البذور قبل الزراعة.",
+            "vegetative":  "ظروف مواتية. وقت مناسب لإضافة السماد التكميلي إذا كانت الأمطار متوقعة.",
+            "flowering":   "مرحلة حرجة — المراقبة الدقيقة وضمان الرطوبة الكافية.",
+            "grain_fill":  "تجنب أي إجهاد للمحصول. الاستمرار في الإدارة الطبيعية.",
+            "harvest":     "مراقبة النضج. تجهيز مخازن نظيفة وجافة قبل الحصاد.",
+            "post_harvest":"وقت مناسب لتجهيز الأرض وتوفير المستلزمات والتخطيط للموسم القادم.",
+            "default":     "الظروف مواتية — الاستمرار في الإدارة الطبيعية.",
+        },
+    },
+}
+
+
 def get_action(crop, scores, district):
     """
-    Growth-stage-aware agronomic action lookup.
-    Never generated by AI — comes from validated agronomic rules.
+    Growth-stage-aware multilingual agronomic action lookup.
+    Language determined by district setting.
+    Never AI-generated — validated agronomic rules only.
     """
+    language = district.get("languages", ["english"])
+    if isinstance(language, list):
+        language = language[0] if language else "english"
+    language = language.lower()
+
+    lang_actions = ACTIONS.get(language, ACTIONS["english"])
     c     = crop.lower()
     stage = scores["growth_stage"]
     dl    = scores["drought_level"]
@@ -842,91 +975,29 @@ def get_action(crop, scores, district):
 
     if dl in (HazardLevel.HIGH, HazardLevel.EXTREME):
         if stage == GrowthStage.FLOWERING:
-            return {
-                "groundnut": (
-                    "CRITICAL: drought during flowering reduces yield 50-70%. "
-                    "Irrigate immediately — even one irrigation can save the crop."
-                ),
-                "maize": (
-                    "CRITICAL: drought at silking causes permanent yield loss. "
-                    "Irrigate 25-50mm immediately if any water source is available."
-                ),
-                "default": (
-                    "CRITICAL: flowering is the most drought-sensitive stage. "
-                    "Irrigate immediately if any water is available."
-                ),
-            }.get(c, "CRITICAL: irrigate immediately — flowering drought causes severe yield loss.")
-
+            t = lang_actions["drought_flowering"]
+            return t.get(c, t["default"])
         elif stage == GrowthStage.GRAIN_FILL:
-            return {
-                "groundnut": (
-                    "Irrigate to support pod filling. "
-                    "Plan early harvest if drought continues beyond 10 days."
-                ),
-                "maize": (
-                    "Irrigate to support grain fill. "
-                    "Consider early harvest if irrigation is not possible."
-                ),
-                "default": (
-                    "Irrigate to support grain fill. "
-                    "Plan for possible early harvest if drought continues."
-                ),
-            }.get(c, "Irrigate to support grain fill if possible.")
-
+            t = lang_actions["drought_grain_fill"]
+            return t.get(c, t["default"])
         elif stage == GrowthStage.VEGETATIVE:
-            return {
-                "groundnut": (
-                    "Apply mulch to conserve soil moisture. "
-                    "Delay fertilizer application until rain returns."
-                ),
-                "millet":  "Millet is drought-tolerant at this stage. Monitor for 7 more days before acting.",
-                "sorghum": "Sorghum tolerates drought at vegetative stage. Monitor for one more week.",
-                "default": "Apply mulch and delay fertilizer until rain returns.",
-            }.get(c, "Apply mulch and delay fertilizer until rain returns.")
-
+            t = lang_actions["drought_vegetative"]
+            return t.get(c, t["default"])
         elif stage == GrowthStage.PLANTING:
-            return (
-                "Delay planting — wait for at least 20mm of rainfall before sowing. "
-                "Seeds will not germinate in dry soil and will be wasted."
-            )
-
+            return lang_actions["drought_planting"]
         else:
-            return (
-                "Dry conditions favour harvest and grain drying. "
-                "Proceed with harvest if crop is mature. "
-                "Ensure grain is dried below 13% moisture before storage."
-            )
+            return lang_actions["drought_harvest"]
 
     if fl in (HazardLevel.HIGH, HazardLevel.EXTREME):
-        return {
-            "groundnut": (
-                "Clear drainage channels immediately. "
-                "Do not apply fertilizer before heavy rain — it will be washed away."
-            ),
-            "rice":  "Monitor paddy water level — excess water beyond 15cm damages plants at this stage.",
-            "maize": "Ensure drainage is clear — maize cannot tolerate waterlogging beyond 48 hours.",
-            "default": "Clear drainage channels. Do not apply fertilizer or pesticide before heavy rain.",
-        }.get(c, "Clear drainage channels and avoid fertilizer before rain.")
+        t = lang_actions["flood"]
+        return t.get(c, t["default"])
 
     if pl in (HazardLevel.HIGH, HazardLevel.EXTREME):
-        return (
-            f"Inspect {crop} fields closely today — conditions strongly favour pest outbreaks. "
-            f"Check undersides of leaves and growing points. "
-            f"Contact your extension officer if damage covers more than 10% of plants."
-        )
+        return lang_actions["pest"].replace("{crop}", crop)
 
-    stage_advice = {
-        GrowthStage.PLANTING:    f"Good planting conditions. Ensure seeds are treated before sowing.",
-        GrowthStage.VEGETATIVE:  f"Favourable conditions. Good time to apply top-dressing if rain is forecast.",
-        GrowthStage.FLOWERING:   f"Critical growth stage — monitor closely and ensure adequate moisture.",
-        GrowthStage.GRAIN_FILL:  f"Avoid any crop stress at this stage. Continue normal management.",
-        GrowthStage.HARVEST:     f"Monitor crop maturity. Prepare clean, dry storage before harvesting.",
-        GrowthStage.POST_HARVEST:f"Good time to prepare land, source inputs, and plan for next season.",
-    }
-    return stage_advice.get(
-        stage,
-        f"Conditions are favourable for {crop} — continue normal management."
-    )
+    adv = lang_actions["stage_advice"]
+    return adv.get(stage.value, adv["default"])
+
 
 # ── STEP 7: GENERATE ADVISORY ─────────────────────────────────────────────────
 
@@ -1034,6 +1105,127 @@ async def generate_advisory(
         if raw.startswith("json"):
             raw = raw[4:]
     return json.loads(raw.strip())
+
+
+def _translate_action(action_en: str, language: str) -> str:
+    """
+    Translate English agronomic action to target language.
+    Uses keyword replacement for common agronomic terms.
+    Full translation improves significantly with Anthropic API key.
+    """
+    if language == "english":
+        return action_en
+
+    if language == "french":
+        replacements = [
+            ("irrigate immediately","irriguer immédiatement"),
+            ("Irrigate immediately","Irriguer immédiatement"),
+            ("CRITICAL:","CRITIQUE :"),
+            ("irrigate","irriguer"),
+            ("Irrigate","Irriguer"),
+            ("drought","sécheresse"),
+            ("flooding","inondation"),
+            ("waterlogging","engorgement"),
+            ("drainage channels","canaux de drainage"),
+            ("Clear drainage","Dégager les canaux"),
+            ("fertilizer","engrais"),
+            ("Fertilizer","Engrais"),
+            ("pesticide","pesticide"),
+            ("mulch","paillis"),
+            ("harvest","récolte"),
+            ("Harvest","Récolter"),
+            ("yield loss","perte de rendement"),
+            ("planting","semis"),
+            ("Planting","Semis"),
+            ("sowing","semis"),
+            ("germinate","germer"),
+            ("soil moisture","humidité du sol"),
+            ("top-dressing","fumure de couverture"),
+            ("storage","stockage"),
+            ("drying","séchage"),
+            ("aflatoxin","aflatoxine"),
+            ("pest","ravageur"),
+            ("Pest","Ravageur"),
+            ("disease","maladie"),
+            ("extension officer","agent agricole"),
+            ("inspect","inspecter"),
+            ("Inspect","Inspecter"),
+            ("monitor","surveiller"),
+            ("Monitor","Surveiller"),
+            ("conditions favourable","conditions favorables"),
+            ("Conditions favourable","Conditions favorables"),
+            ("continue normal management","continuer la gestion normale"),
+            ("Good planting conditions","Bonnes conditions de semis"),
+            ("Good time to apply","Bon moment pour appliquer"),
+            ("rain is forecast","pluie prévue"),
+            ("Critical growth stage","Stade critique de croissance"),
+            ("Avoid any stress","Éviter tout stress"),
+            ("Monitor crop maturity","Surveiller la maturité"),
+            ("prepare clean, dry storage","préparer un stockage propre et sec"),
+            ("prepare land","préparer le sol"),
+            ("plan next season","planifier la prochaine saison"),
+            ("no action needed","aucune action nécessaire"),
+            ("at least","au moins"),
+            ("if possible","si possible"),
+            ("if available","si disponible"),
+            ("immediately","immédiatement"),
+            ("days","jours"),
+            ("weeks","semaines"),
+            ("below 13% moisture","à moins de 13% d'humidité"),
+        ]
+        result = action_en
+        for en, fr in replacements:
+            result = result.replace(en, fr)
+        return result
+
+    if language == "arabic":
+        replacements = [
+            ("CRITICAL:","تحذير:"),
+            ("irrigate immediately","ري فوري"),
+            ("Irrigate immediately","الري فوراً"),
+            ("irrigate","الري"),
+            ("Irrigate","الري"),
+            ("drought","الجفاف"),
+            ("flooding","الفيضان"),
+            ("waterlogging","تشبع التربة بالماء"),
+            ("drainage channels","قنوات الصرف"),
+            ("Clear drainage","تنظيف قنوات الصرف"),
+            ("fertilizer","الأسمدة"),
+            ("Fertilizer","الأسمدة"),
+            ("pesticide","المبيدات"),
+            ("mulch","التغطية العضوية"),
+            ("harvest","الحصاد"),
+            ("Harvest","الحصاد"),
+            ("yield loss","خسارة المحصول"),
+            ("planting","الزراعة"),
+            ("soil moisture","رطوبة التربة"),
+            ("storage","التخزين"),
+            ("drying","التجفيف"),
+            ("aflatoxin","الأفلاتوكسين"),
+            ("pest","الآفات"),
+            ("Pest","الآفات"),
+            ("disease","الأمراض"),
+            ("extension officer","المرشد الزراعي"),
+            ("inspect","فحص"),
+            ("Inspect","فحص"),
+            ("monitor","مراقبة"),
+            ("Monitor","مراقبة"),
+            ("conditions favourable","الظروف مناسبة"),
+            ("continue normal management","استمر في الإدارة الطبيعية"),
+            ("immediately","فوراً"),
+            ("days","أيام"),
+            ("weeks","أسابيع"),
+            ("below 13% moisture","أقل من 13% رطوبة"),
+            ("if possible","إن أمكن"),
+            ("if available","إن توفر"),
+            ("at least","على الأقل"),
+        ]
+        result = action_en
+        for en, ar in replacements:
+            result = result.replace(en, ar)
+        return result
+
+    return action_en
 
 # ── MULTILINGUAL TEMPLATES ────────────────────────────────────────────────────
 
@@ -1144,7 +1336,8 @@ def _template_advisory(district, weather, scores, crop_prices, shocks, pest_aler
     language = language.lower()
 
     t            = _get_t(language)
-    action       = get_action(crop, scores, district)
+    action_en    = get_action(crop, scores, district)
+    action       = _translate_action(action_en, language)
     stage        = scores["growth_stage"]
     stage_label  = t["stage_labels"].get(stage.value, stage.value)
     hazard_label = t["hazard_labels"].get(scores["composite"].value, scores["composite"].value)
