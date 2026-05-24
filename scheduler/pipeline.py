@@ -17,6 +17,13 @@ from typing import Optional
 from dotenv import load_dotenv
 from gtts import gTTS
 
+# RAG advisory generator — grounded in FAO/IFAD knowledge
+try:
+    from intelligence.synthesis.advisory_generator_rag import generate_advisory_rag
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+
 load_dotenv("config/.env")
 logger = structlog.get_logger()
 
@@ -1721,16 +1728,29 @@ async def run_pipeline():
                     "languages": [farmer["preferred_language"]],
                 }
 
-                advisory = await generate_advisory(
-                    district=district_with_lang,
-                    weather=weather,
-                    scores=scores,
-                    crop_prices=crop_prices,
-                    shocks=shocks,
-                    pest_alerts=pest_alerts,
-                    language=farmer["preferred_language"],
-                    crop=primary_crop,
-                )
+                # Use RAG (FAO/IFAD grounded) if available, else template
+                if RAG_AVAILABLE:
+                    advisory = await generate_advisory_rag(
+                        district=district_with_lang,
+                        weather=weather,
+                        scores=scores,
+                        crop_prices=crop_prices,
+                        shocks=shocks,
+                        pest_alerts=pest_alerts,
+                        language=farmer["preferred_language"],
+                        crop=primary_crop,
+                    )
+                else:
+                    advisory = await generate_advisory(
+                        district=district_with_lang,
+                        weather=weather,
+                        scores=scores,
+                        crop_prices=crop_prices,
+                        shocks=shocks,
+                        pest_alerts=pest_alerts,
+                        language=farmer["preferred_language"],
+                        crop=primary_crop,
+                    )
 
                 if farmer["preferred_channel"] == Channel.WHATSAPP:
                     status = await deliver_whatsapp(
@@ -1765,6 +1785,21 @@ async def run_pipeline():
             log.error("district_failed",
                       district=district["id"], error=str(e))
             continue
+
+    # Build knowledge base on first run if not ready
+    try:
+        from knowledge.retriever import is_kb_ready, get_kb_size
+        from knowledge.ingest import build_knowledge_base
+        if not is_kb_ready():
+            logger.info("kb_building_first_time")
+            result = build_knowledge_base()
+            logger.info("kb_built",
+                        docs_success=result.get("success", 0),
+                        chunks=result.get("chunks", 0))
+        else:
+            logger.info("kb_ready", chunks=get_kb_size())
+    except Exception as e:
+        logger.warning("kb_build_failed", error=str(e))
 
     logger.info("agriews_v2_complete")
 
