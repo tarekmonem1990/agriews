@@ -24,7 +24,10 @@ try:
 except ImportError:
     RAG_AVAILABLE = False
 
-load_dotenv("config/.env", override=False)
+# Only load .env if not already set by Railway
+import pathlib
+if pathlib.Path("config/.env").exists():
+    load_dotenv("config/.env", override=False)
 logger = structlog.get_logger()
 
 # DEBUG — log all available env var names to diagnose Railway injection
