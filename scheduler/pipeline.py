@@ -24,7 +24,7 @@ try:
 except ImportError:
     RAG_AVAILABLE = False
 
-load_dotenv("config/.env")
+load_dotenv("config/.env", override=False)
 logger = structlog.get_logger()
 
 # ── SETTINGS ──────────────────────────────────────────────────────────────────
