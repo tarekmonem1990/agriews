@@ -19,9 +19,14 @@ from datetime import date, datetime
 
 logger = structlog.get_logger()
 
-ANTHROPIC_API_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL      = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "600"))
+def _get_api_key():
+    return os.getenv("ANTHROPIC_API_KEY", "")
+
+def _get_model():
+    return os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+
+def _get_max_tokens():
+    return int(os.getenv("ANTHROPIC_MAX_TOKENS", "600"))
 
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 
@@ -67,6 +72,7 @@ async def generate_advisory_rag(
     """
 
     # Try RAG first
+    ANTHROPIC_API_KEY = _get_api_key()
     if not ANTHROPIC_API_KEY:
         logger.warning("rag_no_api_key",
                        hint="Set ANTHROPIC_API_KEY in Railway Variables")
@@ -206,13 +212,13 @@ async def _generate_rag(
         r = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
-                "x-api-key":         ANTHROPIC_API_KEY,
+                "x-api-key":         _get_api_key(),
                 "anthropic-version": "2023-06-01",
                 "content-type":      "application/json",
             },
             json={
-                "model":      ANTHROPIC_MODEL,
-                "max_tokens": ANTHROPIC_MAX_TOKENS,
+                "model":      _get_model(),
+                "max_tokens": _get_max_tokens(),
                 "system":     RAG_SYSTEM_PROMPT,
                 "messages":   [{"role": "user", "content": prompt}],
             },
