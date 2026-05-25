@@ -1,1 +1,1 @@
-web: PYTHONPATH=/app uvicorn api.main:app --host 0.0.0.0 --port $PORT & PYTHONPATH=/app python scheduler/pipeline.py
+web: PYTHONPATH=/app uvicorn api.main:app --host 0.0.0.0 --port $PORT & PYTHONPATH=/app ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID python scheduler/pipeline.py
