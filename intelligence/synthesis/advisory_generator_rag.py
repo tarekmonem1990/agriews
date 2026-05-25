@@ -67,14 +67,22 @@ async def generate_advisory_rag(
     """
 
     # Try RAG first
-    if ANTHROPIC_API_KEY:
-        try:
-            return await _generate_rag(
-                district, weather, scores, crop_prices,
-                shocks, pest_alerts, language, crop
-            )
-        except Exception as e:
-            logger.error("rag_generation_failed", error=str(e))
+    if not ANTHROPIC_API_KEY:
+        logger.warning("rag_no_api_key",
+                       hint="Set ANTHROPIC_API_KEY in Railway Variables")
+        return _template_fallback(
+            district, weather, scores, crop_prices, shocks, pest_alerts, crop
+        )
+
+    try:
+        result = await _generate_rag(
+            district, weather, scores, crop_prices,
+            shocks, pest_alerts, language, crop
+        )
+        logger.info("rag_advisory_success")
+        return result
+    except Exception as e:
+        logger.error("rag_generation_failed", error=str(e))
 
     # Fallback to template
     logger.warning("rag_fallback_to_template")
