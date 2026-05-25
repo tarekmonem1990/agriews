@@ -27,6 +27,11 @@ except ImportError:
 load_dotenv("config/.env", override=False)
 logger = structlog.get_logger()
 
+# DEBUG — log all available env var names to diagnose Railway injection
+import sys
+_env_keys = [k for k in os.environ.keys()]
+print(f"DEBUG ENV KEYS: {sorted(_env_keys)}", file=sys.stderr)
+print(f"DEBUG ANTHROPIC: '{os.environ.get('ANTHROPIC_API_KEY', 'NOT_FOUND')[:20]}'", file=sys.stderr)
 # ── SETTINGS ──────────────────────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY        = os.getenv("ANTHROPIC_API_KEY", "")
