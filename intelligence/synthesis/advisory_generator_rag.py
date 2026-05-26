@@ -53,7 +53,10 @@ Your response must be JSON with exactly these keys:
   "market_section": "...",
   "shock_section": "...",
   "sources_used": ["FAO document title 1", "FAO document title 2"]
-}"""
+}
+CRITICAL: Your response must be valid JSON. Do not use special Unicode characters, 
+line breaks, or unescaped quotes inside JSON string values. 
+Keep all text on single lines within each JSON field."""
 
 
 async def generate_advisory_rag(
