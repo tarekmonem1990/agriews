@@ -1833,5 +1833,191 @@ async def run_pipeline():
     logger.info("agriews_v2_complete")
 
 
+# ── SCHEDULER ────────────────────────────────────────────────────────────────
+
+def get_district_schedules():
+    """
+    Build per-district cron schedules based on timezone.
+    Each district gets its advisory at 6:00 AM local time.
+    Returns list of (district_id, hour_utc, minute_utc) tuples.
+    """
+    from datetime import datetime
+    import pytz
+
+    schedules = []
+    for district in DISTRICTS:
+        tz_name  = district.get("timezone", "UTC")
+        local_hour = 6  # 6:00 AM local time for all districts
+
+        try:
+            tz       = pytz.timezone(tz_name)
+            # Find the UTC offset for today
+            now_local = datetime.now(tz)
+            utc_offset_hours = now_local.utcoffset().total_seconds() / 3600
+            utc_hour = int((local_hour - utc_offset_hours) % 24)
+            schedules.append({
+                "district_id": district["id"],
+                "tz":          tz_name,
+                "local_hour":  local_hour,
+                "utc_hour":    utc_hour,
+            })
+        except Exception as e:
+            logger.warning("timezone_error",
+                           district=district["id"],
+                           tz=tz_name, error=str(e))
+            schedules.append({
+                "district_id": district["id"],
+                "tz":          "UTC",
+                "local_hour":  local_hour,
+                "utc_hour":    local_hour,
+            })
+    return schedules
+
+
+async def run_pipeline_for_district(district_id: str):
+    """Run the pipeline for a single district only."""
+    district = next(
+        (d for d in DISTRICTS if d["id"] == district_id), None
+    )
+    if not district:
+        logger.error("scheduler_district_not_found", district_id=district_id)
+        return
+
+    logger.info("scheduler_triggered",
+                district=district_id,
+                time_utc=datetime.utcnow().isoformat())
+    try:
+        weather     = await fetch_weather(
+            district["id"], district["lat"], district["lon"]
+        )
+        crop_prices = await fetch_market_prices(
+            district["id"], district["country_iso"], district["crops"]
+        )
+        shocks      = await fetch_shocks(
+            district["id"], district["country_iso"],
+            district["lat"], district["lon"]
+        )
+        pest_alerts = await fetch_pest_alerts(
+            district["id"], district["country_iso"],
+            district["crops"], weather
+        )
+
+        farmers = [
+            f for f in FARMERS
+            if f["district_id"] == district["id"]
+        ]
+
+        for farmer in farmers:
+            primary_crop = farmer["crops"][0] if farmer["crops"] else "default"
+            stage        = get_growth_stage(primary_crop, district["country_iso"])
+
+            for extra_crop in farmer["crops"][1:]:
+                extra_stage  = get_growth_stage(extra_crop, district["country_iso"])
+                extra_scores = score_hazards(weather, pest_alerts, shocks, extra_stage)
+                scores       = score_hazards(weather, pest_alerts, shocks, stage)
+                rank = {"none":0,"low":1,"medium":2,"high":3,"extreme":4}
+                if rank[extra_scores["composite"].value] > rank[scores["composite"].value]:
+                    stage        = extra_stage
+                    primary_crop = extra_crop
+
+            scores = score_hazards(weather, pest_alerts, shocks, stage)
+            district_with_lang = {
+                **district,
+                "languages": [farmer["preferred_language"]],
+            }
+
+            if RAG_AVAILABLE:
+                advisory = await generate_advisory_rag(
+                    district=district_with_lang, weather=weather,
+                    scores=scores, crop_prices=crop_prices,
+                    shocks=shocks, pest_alerts=pest_alerts,
+                    language=farmer["preferred_language"],
+                    crop=primary_crop,
+                )
+            else:
+                advisory = await generate_advisory(
+                    district=district_with_lang, weather=weather,
+                    scores=scores, crop_prices=crop_prices,
+                    shocks=shocks, pest_alerts=pest_alerts,
+                    language=farmer["preferred_language"],
+                    crop=primary_crop,
+                )
+
+            if farmer["preferred_channel"] == Channel.TELEGRAM:
+                await deliver_telegram(
+                    farmer=farmer, advisory=advisory,
+                    crop=primary_crop, scores=scores,
+                    district=district,
+                )
+            elif farmer["preferred_channel"] == Channel.WHATSAPP:
+                await deliver_whatsapp(
+                    farmer=farmer, advisory=advisory,
+                    crop=primary_crop, scores=scores,
+                    district=district,
+                )
+
+        logger.info("scheduler_district_complete", district=district_id)
+
+    except Exception as e:
+        logger.error("scheduler_district_failed",
+                     district=district_id, error=str(e))
+
+
+def start_scheduler():
+    """
+    Start the APScheduler with per-district cron jobs.
+    Each district gets its own job scheduled at 6 AM local time.
+    Also runs the full pipeline immediately on startup.
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    import pytz
+
+    scheduler = BackgroundScheduler(timezone="UTC")
+    schedules = get_district_schedules()
+
+    for sched in schedules:
+        utc_hour = sched["utc_hour"]
+        dist_id  = sched["district_id"]
+
+        scheduler.add_job(
+            lambda d=dist_id: asyncio.run(run_pipeline_for_district(d)),
+            trigger=CronTrigger(hour=utc_hour, minute=0, timezone="UTC"),
+            id=f"advisory_{dist_id}",
+            name=f"Advisory — {dist_id}",
+            replace_existing=True,
+        )
+        logger.info("scheduler_job_added",
+                    district=dist_id,
+                    local_hour=sched["local_hour"],
+                    utc_hour=utc_hour,
+                    tz=sched["tz"])
+
+    scheduler.start()
+    logger.info("scheduler_started", jobs=len(schedules))
+    return scheduler
+
+
 if __name__ == "__main__":
-    asyncio.run(run_pipeline())
+    import sys
+
+    if "--once" in sys.argv:
+        # Run pipeline once and exit (for testing)
+        asyncio.run(run_pipeline())
+    else:
+        # Run once immediately on startup, then schedule daily
+        logger.info("pipeline_startup_run")
+        asyncio.run(run_pipeline())
+
+        # Start the daily scheduler
+        scheduler = start_scheduler()
+        logger.info("pipeline_running_scheduled")
+
+        # Keep the process alive
+        import time
+        try:
+            while True:
+                time.sleep(60)
+        except (KeyboardInterrupt, SystemExit):
+            scheduler.shutdown()
+            logger.info("scheduler_stopped")
