@@ -231,7 +231,19 @@ async def _generate_rag(
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    result = json.loads(raw.strip())
+    raw = raw.strip()
+
+    # Robust JSON extraction — find the outermost { } block
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        # Find first { and last } and try again
+        start = raw.find("{")
+        end   = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            result = json.loads(raw[start:end])
+        else:
+            raise
 
     # Log which sources were used
     sources = result.get("sources_used", [])
