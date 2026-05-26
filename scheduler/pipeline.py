@@ -1517,6 +1517,7 @@ async def deliver_telegram(farmer, advisory, crop, scores, district):
 
 
     # Clean advisory sections for safe HTML delivery (all languages)
+    weather_clean = _clean_advisory_text(advisory['weather_section'])
     market_clean  = _clean_advisory_text(advisory['market_section'])
     shock_clean   = _clean_advisory_text(advisory['shock_section'])
 
