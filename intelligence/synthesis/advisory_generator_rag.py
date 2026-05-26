@@ -233,11 +233,9 @@ async def _generate_rag(
             raw = raw[4:]
     raw = raw.strip()
 
-    # Robust JSON extraction — find the outermost { } block
     try:
         result = json.loads(raw)
     except json.JSONDecodeError:
-        # Find first { and last } and try again
         start = raw.find("{")
         end   = raw.rfind("}") + 1
         if start >= 0 and end > start:
