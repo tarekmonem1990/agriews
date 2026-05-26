@@ -24,17 +24,9 @@ try:
 except ImportError:
     RAG_AVAILABLE = False
 
-# Only load .env if not already set by Railway
-import pathlib
-if pathlib.Path("config/.env").exists():
-    load_dotenv("config/.env", override=False)
+load_dotenv("config/.env")
 logger = structlog.get_logger()
 
-# DEBUG — log all available env var names to diagnose Railway injection
-import sys
-_env_keys = [k for k in os.environ.keys()]
-print(f"DEBUG ENV KEYS: {sorted(_env_keys)}", file=sys.stderr)
-print(f"DEBUG ANTHROPIC: '{os.environ.get('ANTHROPIC_API_KEY', 'NOT_FOUND')[:20]}'", file=sys.stderr)
 # ── SETTINGS ──────────────────────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY        = os.getenv("ANTHROPIC_API_KEY", "")
@@ -1470,6 +1462,28 @@ def generate_voice_note(advisory, language, district_name, crop, stage):
             logger.error("voice_note_failed_completely", error=str(e2))
             return None
 
+
+# ── MESSAGE SANITISATION ──────────────────────────────────────────────────────
+
+def _clean_advisory_text(text: str) -> str:
+    """
+    Clean advisory text for safe Telegram HTML delivery.
+    Fixes all language issues: French, Arabic, English.
+    - FAO citations [1],[2] → (1),(2) — brackets confuse Telegram Markdown
+    - Stray HTML chars → escaped
+    - Unmatched underscores → removed
+    """
+    import re
+    if not text:
+        return text
+    # Convert FAO citation brackets [1] → (1)
+    text = re.sub(r'\[(\d+)\]', r'(\1)', text)
+    # Remove remaining unmatched brackets (keep content)
+    text = re.sub(r'\[([^\]]*)\](?!\()', r'\1', text)
+    # Escape HTML special chars
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return text
+
 # ── TELEGRAM DELIVERY ─────────────────────────────────────────────────────────
 
 async def deliver_telegram(farmer, advisory, crop, scores, district):
@@ -1498,19 +1512,25 @@ async def deliver_telegram(farmer, advisory, crop, scores, district):
     hazard_level = scores["composite"]
     stage        = scores["growth_stage"]
     cascade_line = (
-        "\n⚠️ *تحذير: مخاطر متعددة متزامنة*" if scores["cascade"] else ""
+        "\n⚠️ <b>MULTIPLE HAZARDS — elevated risk</b>" if scores["cascade"] else ""
     )
 
+
+    # Clean advisory sections for safe HTML delivery (all languages)
+    market_clean  = _clean_advisory_text(advisory['market_section'])
+    shock_clean   = _clean_advisory_text(advisory['shock_section'])
+
     message = (
-        f"🌾 *AgriEWS Advisory* | {date.today().strftime('%d %b %Y')}\n"
-        f"📍 *{district['name']}* | {crop.title()} | {stage.value}\n"
-        f"🚨 Status: *{LABELS[hazard_level]}*"
+        f"🌾 <b>AgriEWS Advisory</b> | {date.today().strftime('%d %b %Y')}\n"
+        f"📍 <b>{district['name']}</b> | {crop.title()} | {stage.value}\n"
+        f"🚨 Status: <b>{LABELS[hazard_level]}</b>"
         f"{cascade_line}\n\n"
-        f"*🌦 Weather & Action*\n{advisory['weather_section']}\n\n"
-        f"*📈 Market*\n{advisory['market_section']}\n\n"
-        f"*⚡ Inputs & Alerts*\n{advisory['shock_section']}\n\n"
-        f"_Reply /report to send a field observation_\n"
-        f"_AgriEWS is free_"
+        f"🌦 <b>Weather &amp; Action</b>\n{weather_clean}\n\n"
+        f"📈 <b>Market</b>\n{market_clean}\n\n"
+        f"⚡ <b>Inputs &amp; Alerts</b>\n{shock_clean}\n\n"
+        f"<i>Reply /report to send a field observation</i>\n"
+        f"<i>AgriEWS is free</i>"
+        f"<i>AgriEWS is free</i>"
     )
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -1521,7 +1541,7 @@ async def deliver_telegram(farmer, advisory, crop, scores, district):
             r = await client.post(url, json={
                 "chat_id":    chat_id,
                 "text":       message,
-                "parse_mode": "Markdown",
+                "parse_mode": "HTML",
             })
             r.raise_for_status()
             logger.info("telegram_text_sent", farmer=farmer["id"], chat_id=chat_id)
